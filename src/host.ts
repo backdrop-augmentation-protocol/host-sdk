@@ -1,145 +1,91 @@
-import {
-  HelloPayload, Message, PROTOCOL_VERSION, isMessage, messageNames
-} from './protocol.js';
+import { BapError, HelloAckResult, HelloPayload, Manifest, Message, PROTOCOL, event, isBapMessage, isManifest, request } from './protocol.js';
 
-export type ComponentState = 'created' | 'handshaking' | 'ready' | 'paused' | 'stopped' | 'failed';
+export type ComponentState = 'created' | 'connected' | 'initialized' | 'running' | 'paused' | 'stopped' | 'failed';
 export interface Size { width: number; height: number; devicePixelRatio?: number }
-export interface HostOptions {
-  implementation?: string;
-  version?: string;
-  capabilities?: string[];
-  handshakeTimeoutMs?: number;
-  targetOrigin?: string;
-  window?: Window;
-  document?: Document;
-}
-export interface ComponentOptions {
-  id: string;
-  src: string;
-  container: HTMLElement;
-  size?: Size;
-  allowedOrigin?: string;
-}
+export interface HostOptions { implementationId?: string; implementationName?: string; implementationVersion?: string; capabilities?: string[]; permissions?: string[]; handshakeTimeoutMs?: number; targetOrigin?: string; window?: Window; document?: Document; }
+export interface ComponentOptions { id: string; src: string; container: HTMLElement; size?: Size; allowedOrigin?: string; }
 type Listener = (value: unknown) => void;
-
-function id(prefix: string): string { return `${prefix}-${Math.random().toString(36).slice(2)}-${Date.now()}`; }
+const bapError = (code: BapError['code'], message: string, details?: Record<string, unknown>): BapError => ({ code, message, ...(details ? { details } : {}) });
 
 export class ComponentHandle {
-  readonly id: string;
   readonly iframe: HTMLIFrameElement;
   state: ComponentState = 'created';
   capabilities: string[] = [];
-  readonly allowedOrigin?: string;
+  grantedPermissions: string[] = [];
+  sessionId?: string;
+  private helloRequestId?: string;
+  private readonly pendingRequests = new Map<string, 'initialize' | 'start' | 'pause' | 'resume' | 'stop'>();
   private readonly listeners = new Map<string, Set<Listener>>();
   private handshakeTimer?: ReturnType<typeof setTimeout>;
+  private expectedOrigin: string;
 
-  constructor(private readonly host: HostRuntime, options: ComponentOptions) {
-    this.id = options.id;
-    this.allowedOrigin = options.allowedOrigin;
+  constructor(private readonly host: HostRuntime, readonly id: string, options: ComponentOptions) {
+    this.expectedOrigin = options.allowedOrigin ?? host.targetOrigin;
+    if (this.expectedOrigin === '*') { try { this.expectedOrigin = new URL(options.src, host.document.baseURI).origin; } catch { /* test document */ } }
     const document = host.document;
-    this.iframe = document.createElement('iframe');
-    this.iframe.src = options.src;
-    this.iframe.title = `BAP component ${options.id}`;
-    this.iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
-    this.iframe.style.border = '0';
-    this.iframe.style.display = 'block';
-    this.iframe.addEventListener('load', () => this.beginHandshake());
-    this.iframe.addEventListener('error', () => this.fail('iframe_error', 'Component iframe failed to load'));
-    if (options.size) this.setSize(options.size);
-    options.container.appendChild(this.iframe);
-    this.state = 'handshaking';
-    this.handshakeTimer = setTimeout(() => {
-      if (this.state === 'handshaking') this.fail('handshake_timeout', 'Component handshake timed out');
-    }, host.handshakeTimeoutMs);
+    this.iframe = document.createElement('iframe'); this.iframe.src = options.src; this.iframe.title = `BAP component ${options.id}`;
+    this.iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin'); this.iframe.style.border = '0'; this.iframe.style.display = 'block';
+    this.iframe.addEventListener('load', () => this.beginHandshake()); this.iframe.addEventListener('error', () => this.fail(bapError('INTERNAL_ERROR', 'Component iframe failed to load')));
+    if (options.size) this.setSize(options.size); options.container.appendChild(this.iframe);
+    this.handshakeTimer = setTimeout(() => { if (this.state === 'connected') this.fail(bapError('TIMEOUT', 'Component handshake timed out', { id: this.id })); }, host.handshakeTimeoutMs);
   }
-
-  on(name: string, listener: Listener): () => void {
-    const set = this.listeners.get(name) ?? new Set<Listener>();
-    set.add(listener); this.listeners.set(name, set);
-    return () => set.delete(listener);
-  }
-
-  setSize(size: Size): void {
-    this.iframe.style.width = `${size.width}px`; this.iframe.style.height = `${size.height}px`;
-    this.sendEvent(messageNames.sizeChanged, size);
-  }
-
-  pause(): void { if (this.state === 'ready') { this.state = 'paused'; this.sendEvent(messageNames.paused, { paused: true }); } }
-  resume(): void { if (this.state === 'paused') { this.state = 'ready'; this.sendEvent(messageNames.resumed, { paused: false }); } }
-  stop(): void {
-    if (this.state === 'stopped') return;
-    this.state = 'stopped'; clearTimeout(this.handshakeTimer);
-    this.sendEvent(messageNames.lifecycle, { state: 'stopped' });
-    this.iframe.remove(); this.emit('stopped', undefined);
-  }
-
-  private beginHandshake(): void {
-    if (this.state !== 'handshaking') return;
-    this.send({ kind: 'request', name: messageNames.hostHello, payload: this.host.hello() });
-  }
-
+  on(name: string, listener: Listener): () => void { const set = this.listeners.get(name) ?? new Set<Listener>(); set.add(listener); this.listeners.set(name, set); return () => set.delete(listener); }
+  setSize(size: Size): void { this.iframe.style.width = `${size.width}px`; this.iframe.style.height = `${size.height}px`; if (['initialized', 'running', 'paused'].includes(this.state)) this.sendEvent('host.size.changed', size); }
+  pause(): void { if (this.state === 'running') this.sendLifecycle('pause'); }
+  resume(): void { if (this.state === 'paused') this.sendLifecycle('resume'); }
+  stop(): void { if (this.state === 'stopped') return; if (['initialized', 'running', 'paused'].includes(this.state)) this.sendLifecycle('stop'); else this.finishStop(); }
+  acceptsOrigin(origin: string): boolean { return this.expectedOrigin === '*' || origin === this.expectedOrigin; }
   receive(message: Message): void {
-    if (message.name === messageNames.componentHello && message.kind === 'response') {
-      const payload = message.payload as HelloPayload | undefined;
-      if (!payload || payload.role !== 'component') return this.fail('invalid_hello', 'Invalid component hello');
-      clearTimeout(this.handshakeTimer); this.capabilities = payload.capabilities ?? [];
-      this.state = 'ready'; this.emit('ready', payload); this.sendEvent(messageNames.lifecycle, { state: 'started' });
-      return;
-    }
-    if (message.name === messageNames.fault) return this.fail('component_fault', String((message.payload as { message?: string })?.message ?? 'Component reported a fault'));
-    this.emit(message.name, message.payload);
+    if (message.sessionId && this.sessionId && message.sessionId !== this.sessionId) return;
+    if (message.kind === 'response') { if (message.id === this.helloRequestId) return this.handleHelloResponse(message); return this.handleLifecycleResponse(message); }
+    if (message.kind === 'event' && message.event === 'component.fault') this.fail(bapError('INTERNAL_ERROR', 'Component reported a fault', message.payload as Record<string, unknown> | undefined));
+    if (message.event) this.emit(message.event, message.payload);
   }
-
-  acceptsOrigin(origin: string): boolean {
-    return !this.allowedOrigin || this.allowedOrigin === '*' || origin === this.allowedOrigin;
+  private beginHandshake(): void { if (this.state !== 'created') return; this.state = 'connected'; const hello = request('hello', this.host.hello()); this.helloRequestId = hello.id; this.send(hello); }
+  private handleHelloResponse(message: Message): void {
+    if (message.ok !== true || !message.result) return this.fail(message.error ?? bapError('INVALID_MESSAGE', 'Invalid helloAck response'));
+    const result = message.result as unknown as HelloAckResult;
+    if (result.protocol?.name !== PROTOCOL.name || result.protocol.profile !== PROTOCOL.profile || !result.sessionId) return this.fail(bapError('INVALID_MESSAGE', 'Invalid helloAck result'));
+    clearTimeout(this.handshakeTimer); this.sessionId = result.sessionId; this.capabilities = result.capabilities ?? []; this.grantedPermissions = result.permissions ?? []; this.sendLifecycle('initialize');
   }
-
-  private sendEvent(name: string, payload: unknown): void { this.send({ kind: 'event', name, payload }); }
-  private send(partial: Pick<Message, 'kind' | 'name' | 'payload'>): void {
-    const target = this.iframe.contentWindow;
-    if (!target) return;
-    target.postMessage({ bap: 'message', id: id('msg'), protocolVersion: PROTOCOL_VERSION, ...partial } satisfies Message, this.host.targetOrigin);
+  private handleLifecycleResponse(message: Message): void {
+    if (message.ok !== true || !message.result) return this.fail(message.error ?? bapError('INVALID_MESSAGE', 'Invalid lifecycle response'));
+    const method = this.pendingRequests.get(message.id); this.pendingRequests.delete(message.id);
+    if (method === 'initialize' && this.state === 'connected') { this.state = 'initialized'; this.sendLifecycle('start'); return; }
+    if (method === 'start' && this.state === 'initialized') { this.state = 'running'; this.emit('ready', { capabilities: this.capabilities }); return; }
+    if (method === 'pause' && this.state === 'running') { this.state = 'paused'; this.emit('paused', undefined); return; }
+    if (method === 'resume' && this.state === 'paused') { this.state = 'running'; this.emit('resumed', undefined); return; }
+    if (method === 'stop') this.finishStop();
   }
-  private fail(code: string, message: string): void {
-    if (this.state === 'failed' || this.state === 'stopped') return;
-    clearTimeout(this.handshakeTimer); this.state = 'failed';
-    this.iframe.style.display = 'none'; this.emit('fault', { code, message }); this.host.emit('componentFault', { id: this.id, code, message });
-  }
+  private sendLifecycle(method: 'initialize' | 'start' | 'pause' | 'resume' | 'stop'): void { const message = request(method, {}, this.sessionId); this.pendingRequests.set(message.id, method); this.send(message); }
+  private sendEvent(name: string, payload: object): void { this.send(event(name, payload, this.sessionId)); }
+  private send(message: Message): void { this.iframe.contentWindow?.postMessage(message, this.host.targetOrigin); }
+  private finishStop(): void { if (this.state === 'stopped') return; clearTimeout(this.handshakeTimer); this.state = 'stopped'; this.iframe.remove(); this.emit('stopped', undefined); }
+  private fail(fault: BapError): void { if (this.state === 'failed' || this.state === 'stopped') return; clearTimeout(this.handshakeTimer); this.state = 'failed'; this.iframe.style.display = 'none'; this.emit('fault', fault); this.host.emit('componentFault', { id: this.id, error: fault }); }
   private emit(name: string, value: unknown): void { for (const listener of this.listeners.get(name) ?? []) listener(value); }
 }
 
 export class HostRuntime {
-  readonly document: Document;
-  readonly targetOrigin: string;
-  readonly handshakeTimeoutMs: number;
-  private readonly options: Required<Pick<HostOptions, 'implementation' | 'version' | 'capabilities'>>;
-  private readonly components = new Map<string, ComponentHandle>();
-  private readonly listeners = new Map<string, Set<Listener>>();
-  private readonly messageListener: (event: MessageEvent) => void;
-
+  readonly document: Document; readonly targetOrigin: string; readonly handshakeTimeoutMs: number;
+  readonly manifest: Manifest;
+  private readonly options: Required<Pick<HostOptions, 'implementationId' | 'implementationName' | 'implementationVersion' | 'capabilities' | 'permissions'>>;
+  private readonly components = new Map<string, ComponentHandle>(); private readonly listeners = new Map<string, Set<Listener>>(); private readonly messageListener: (event: MessageEvent) => void;
   constructor(options: HostOptions = {}) {
-    const win = options.window ?? globalThis.window;
-    this.document = options.document ?? win?.document;
-    if (!this.document) throw new Error('HostRuntime requires a browser document');
+    const win = options.window ?? globalThis.window; this.document = options.document ?? win?.document; if (!this.document) throw new Error('HostRuntime requires a browser document');
     this.targetOrigin = options.targetOrigin ?? '*'; this.handshakeTimeoutMs = options.handshakeTimeoutMs ?? 5000;
-    this.options = { implementation: options.implementation ?? 'bap-host-sdk', version: options.version ?? '0.1.0', capabilities: options.capabilities ?? ['lifecycle', 'size', 'pause-resume'] };
-    this.messageListener = (event) => this.receive(event);
-    win?.addEventListener('message', this.messageListener);
+    this.options = { implementationId: options.implementationId ?? 'bap.host-sdk', implementationName: options.implementationName ?? 'BAP Host SDK', implementationVersion: options.implementationVersion ?? '0.1.0', capabilities: options.capabilities ?? ['lifecycle', 'size', 'pause-resume'], permissions: options.permissions ?? [] };
+    this.manifest = { protocol: PROTOCOL, id: this.options.implementationId, name: this.options.implementationName, version: this.options.implementationVersion, implementationVersion: this.options.implementationVersion, role: 'host', capabilities: this.options.capabilities, permissions: this.options.permissions, entrypoints: { default: 'index.html' }, configScopes: ['global', 'wallpaper'] };
+    if (!isManifest(this.manifest)) throw new Error('Invalid Host manifest');
+    this.messageListener = (event) => this.receive(event); win?.addEventListener('message', this.messageListener);
   }
-
-  hello(): HelloPayload { return { role: 'host', ...this.options }; }
+  hello(): HelloPayload { return { role: 'host', implementation: { id: this.options.implementationId, name: this.options.implementationName, version: this.options.implementationVersion }, supportedProtocols: [PROTOCOL], capabilities: this.options.capabilities, requestedPermissions: this.options.permissions }; }
   on(name: string, listener: Listener): () => void { const set = this.listeners.get(name) ?? new Set<Listener>(); set.add(listener); this.listeners.set(name, set); return () => set.delete(listener); }
   emit(name: string, value: unknown): void { for (const listener of this.listeners.get(name) ?? []) listener(value); }
-  mount(options: ComponentOptions): ComponentHandle { if (this.components.has(options.id)) throw new Error(`Component already mounted: ${options.id}`); const handle = new ComponentHandle(this, options); this.components.set(options.id, handle); handle.on('stopped', () => this.components.delete(options.id)); return handle; }
+  mount(options: ComponentOptions): ComponentHandle { if (this.components.has(options.id)) throw new Error(`Component already mounted: ${options.id}`); const handle = new ComponentHandle(this, options.id, options); this.components.set(options.id, handle); handle.on('stopped', () => this.components.delete(options.id)); return handle; }
   get(id: string): ComponentHandle | undefined { return this.components.get(id); }
   pauseAll(): void { for (const component of this.components.values()) component.pause(); }
   resumeAll(): void { for (const component of this.components.values()) component.resume(); }
   resizeAll(size: Size): void { for (const component of this.components.values()) component.setSize(size); }
   destroy(): void { for (const component of this.components.values()) component.stop(); this.components.clear(); }
-  private receive(event: MessageEvent): void {
-    if (!isMessage(event.data)) return;
-    for (const component of this.components.values()) {
-      if (event.source === component.iframe.contentWindow && component.acceptsOrigin(event.origin)) { component.receive(event.data); return; }
-    }
-  }
+  private receive(event: MessageEvent): void { if (!isBapMessage(event.data)) return; for (const component of this.components.values()) if (event.source === component.iframe.contentWindow && component.acceptsOrigin(event.origin)) { component.receive(event.data); return; } }
 }
