@@ -1,5 +1,7 @@
 # BAP Host SDK
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 Minimal TypeScript Web Host runtime for BAP Embedded Mode components.
 
 The MVP provides:
