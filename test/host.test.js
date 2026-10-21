@@ -43,3 +43,19 @@ test('rejects old envelopes and unauthorized origins while isolating faults', ()
   window.dispatch({ type: 'message', origin: 'https://component.test', source: a.iframe.contentWindow, data: event('component.fault', { message: 'boom' }) }); assert.equal(a.state, 'failed'); assert.equal(b.state, 'created'); assert.equal(fault.error.code, 'INTERNAL_ERROR');
   window.dispatch({ type: 'message', origin: 'https://component.test', source: b.iframe.contentWindow, data: { bap: 'message', kind: 'event', name: 'component.fault' } }); assert.equal(b.state, 'created'); host.destroy();
 });
+
+test('accepts CEF file origins only for file-backed component frames', () => {
+  const window = new FakeWindow();
+  const document = new FakeDocument(); document.baseURI = 'file:///D:/wallpaper/index.html';
+  const host = new HostRuntime({ window, document });
+  const component = host.mount({ id: 'clock', src: './clock.html', container: new Container() });
+  assert.equal(component.acceptsOrigin('null'), true);
+  assert.equal(component.acceptsOrigin('file://'), true);
+  assert.equal(component.acceptsOrigin(''), true);
+  assert.equal(component.acceptsOrigin('https://evil.test'), false);
+  component.iframe.load();
+  const hello = component.iframe.contentWindow.messages[0].message;
+  window.dispatch({ type: 'message', origin: 'file://', source: component.iframe.contentWindow, data: response(hello.id, { protocol: hello.protocol, capabilities: [], permissions: [], sessionId: 's' }) });
+  assert.equal(component.iframe.contentWindow.messages.at(-1).message.method, 'initialize');
+  host.destroy();
+});

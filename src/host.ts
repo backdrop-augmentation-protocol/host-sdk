@@ -18,8 +18,10 @@ export class ComponentHandle {
   private readonly listeners = new Map<string, Set<Listener>>();
   private handshakeTimer?: ReturnType<typeof setTimeout>;
   private expectedOrigin: string;
+  private readonly fileSource: boolean;
 
   constructor(private readonly host: HostRuntime, readonly id: string, options: ComponentOptions) {
+    this.fileSource = new URL(options.src, host.document.baseURI).protocol === 'file:';
     this.expectedOrigin = options.allowedOrigin ?? host.targetOrigin;
     if (this.expectedOrigin === '*') { try { this.expectedOrigin = new URL(options.src, host.document.baseURI).origin; } catch { /* test document */ } }
     const document = host.document;
@@ -34,7 +36,11 @@ export class ComponentHandle {
   pause(): void { if (this.state === 'running') this.sendLifecycle('pause'); }
   resume(): void { if (this.state === 'paused') this.sendLifecycle('resume'); }
   stop(): void { if (this.state === 'stopped') return; if (['initialized', 'running', 'paused'].includes(this.state)) this.sendLifecycle('stop'); else this.finishStop(); }
-  acceptsOrigin(origin: string): boolean { return this.expectedOrigin === '*' || origin === this.expectedOrigin; }
+  acceptsOrigin(origin: string): boolean {
+    if (this.expectedOrigin === '*' || origin === this.expectedOrigin) return true;
+    // CEF may report file: MessageEvent origins as file:// rather than null.
+    return this.fileSource && this.expectedOrigin === 'null' && (origin === 'file://' || origin === '');
+  }
   receive(message: Message): void {
     if (message.sessionId && this.sessionId && message.sessionId !== this.sessionId) return;
     if (message.kind === 'response') { if (message.correlationId === this.helloRequestId) return this.handleHelloResponse(message); return this.handleLifecycleResponse(message); }
