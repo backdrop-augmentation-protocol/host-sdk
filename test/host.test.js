@@ -6,7 +6,7 @@ class FakeWindow { listeners = new Map(); addEventListener(name, fn) { this.list
 class FakeIframe { style = {}; contentWindow = { messages: [], postMessage: (message, origin) => this.contentWindow.messages.push({ message, origin }) }; listeners = new Map(); setAttribute() {} addEventListener(name, fn) { this.listeners.set(name, fn); } remove() { this.removed = true; } load() { this.listeners.get('load')?.(); } }
 class FakeDocument { baseURI = 'https://wallpaper.test/'; createElement() { return new FakeIframe(); } }
 class Container { children = []; appendChild(child) { this.children.push(child); } }
-const response = (id, result, sessionId = 'session-1') => ({ protocol: { name: 'bap', version: '0.1.0', profile: 'core' }, kind: 'response', id, timestamp: new Date().toISOString(), sessionId, ok: true, result });
+const response = (correlationId, result, sessionId = 'session-1') => ({ protocol: { name: 'bap', version: '0.1.0', profile: 'core' }, kind: 'response', id: `response-${correlationId}`, correlationId, timestamp: new Date().toISOString(), sessionId, ok: true, result });
 const event = (name, payload) => ({ protocol: { name: 'bap', version: '0.1.0', profile: 'core' }, kind: 'event', id: 'event-1', timestamp: new Date().toISOString(), event: name, payload });
 
 test('uses the Core Profile envelope and completes helloAck, initialize, and start', () => {

@@ -37,7 +37,7 @@ export class ComponentHandle {
   acceptsOrigin(origin: string): boolean { return this.expectedOrigin === '*' || origin === this.expectedOrigin; }
   receive(message: Message): void {
     if (message.sessionId && this.sessionId && message.sessionId !== this.sessionId) return;
-    if (message.kind === 'response') { if (message.id === this.helloRequestId) return this.handleHelloResponse(message); return this.handleLifecycleResponse(message); }
+    if (message.kind === 'response') { if (message.correlationId === this.helloRequestId) return this.handleHelloResponse(message); return this.handleLifecycleResponse(message); }
     if (message.kind === 'event' && message.event === 'component.fault') this.fail(bapError('INTERNAL_ERROR', 'Component reported a fault', message.payload as Record<string, unknown> | undefined));
     if (message.event) this.emit(message.event, message.payload);
   }
@@ -50,7 +50,9 @@ export class ComponentHandle {
   }
   private handleLifecycleResponse(message: Message): void {
     if (message.ok !== true || !message.result) return this.fail(message.error ?? bapError('INVALID_MESSAGE', 'Invalid lifecycle response'));
-    const method = this.pendingRequests.get(message.id); this.pendingRequests.delete(message.id);
+    const method = message.correlationId ? this.pendingRequests.get(message.correlationId) : undefined;
+    if (!method) return;
+    this.pendingRequests.delete(message.correlationId!);
     if (method === 'initialize' && this.state === 'connected') { this.state = 'initialized'; this.sendLifecycle('start'); return; }
     if (method === 'start' && this.state === 'initialized') { this.state = 'running'; this.emit('ready', { capabilities: this.capabilities }); return; }
     if (method === 'pause' && this.state === 'running') { this.state = 'paused'; this.emit('paused', undefined); return; }
