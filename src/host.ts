@@ -38,8 +38,10 @@ export class ComponentHandle {
   stop(): void { if (this.state === 'stopped') return; if (['initialized', 'running', 'paused'].includes(this.state)) this.sendLifecycle('stop'); else this.finishStop(); }
   acceptsOrigin(origin: string): boolean {
     if (this.expectedOrigin === '*' || origin === this.expectedOrigin) return true;
-    // CEF may report file: MessageEvent origins as file:// rather than null.
-    return this.fileSource && this.expectedOrigin === 'null' && (origin === 'file://' || origin === '');
+    // CEF and browsers disagree on which opaque origin string a file: frame
+    // exposes. The iframe window identity is checked by HostRuntime.receive.
+    return this.fileSource && (this.expectedOrigin === 'null' || this.expectedOrigin === 'file://')
+      && (origin === 'null' || origin === 'file://' || origin === '');
   }
   receive(message: Message): void {
     if (message.sessionId && this.sessionId && message.sessionId !== this.sessionId) return;

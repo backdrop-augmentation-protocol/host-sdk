@@ -59,3 +59,17 @@ test('accepts CEF file origins only for file-backed component frames', () => {
   assert.equal(component.iframe.contentWindow.messages.at(-1).message.method, 'initialize');
   host.destroy();
 });
+
+test('accepts opaque CEF event origin when URL reports file://', () => {
+  const window = new FakeWindow();
+  const document = new FakeDocument(); document.baseURI = 'file:///D:/wallpaper/index.html';
+  const host = new HostRuntime({ window, document });
+  const component = host.mount({ id: 'clock', src: './clock.html', container: new Container(), allowedOrigin: 'file://' });
+  assert.equal(component.acceptsOrigin('null'), true);
+  assert.equal(component.acceptsOrigin('https://evil.test'), false);
+  component.iframe.load();
+  const hello = component.iframe.contentWindow.messages[0].message;
+  window.dispatch({ type: 'message', origin: 'null', source: component.iframe.contentWindow, data: response(hello.id, { protocol: hello.protocol, capabilities: [], permissions: [], sessionId: 's' }) });
+  assert.equal(component.iframe.contentWindow.messages.at(-1).message.method, 'initialize');
+  host.destroy();
+});
