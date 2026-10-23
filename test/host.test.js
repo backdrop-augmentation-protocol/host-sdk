@@ -9,6 +9,15 @@ class Container { children = []; appendChild(child) { this.children.push(child);
 const response = (correlationId, result, sessionId = 'session-1') => ({ protocol: { name: 'bap', version: '0.1.0', profile: 'core' }, kind: 'response', id: `response-${correlationId}`, correlationId, timestamp: new Date().toISOString(), sessionId, ok: true, result });
 const event = (name, payload) => ({ protocol: { name: 'bap', version: '0.1.0', profile: 'core' }, kind: 'event', id: 'event-1', timestamp: new Date().toISOString(), event: name, payload });
 
+test('navigates a mounted iframe after it is attached to the document', () => {
+  const host = new HostRuntime({ window: new FakeWindow(), document: new FakeDocument() });
+  const container = new Container();
+  container.appendChild = child => { assert.equal(child.src, undefined); container.children.push(child); };
+  const component = host.mount({ id: 'clock', src: 'https://component.test/clock.html', container });
+  assert.equal(component.iframe.src, 'https://component.test/clock.html');
+  host.destroy();
+});
+
 test('uses the Core Profile envelope and completes helloAck, initialize, and start', () => {
   const window = new FakeWindow(); const host = new HostRuntime({ window, document: new FakeDocument(), targetOrigin: 'https://component.test' });
   assert.equal(isManifest(host.manifest), true); assert.equal(host.manifest.role, 'host'); assert.deepEqual(host.manifest.configScopes, ['global', 'wallpaper']);
