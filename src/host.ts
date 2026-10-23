@@ -25,11 +25,10 @@ export class ComponentHandle {
     this.expectedOrigin = options.allowedOrigin ?? host.targetOrigin;
     if (this.expectedOrigin === '*') { try { this.expectedOrigin = new URL(options.src, host.document.baseURI).origin; } catch { /* test document */ } }
     const document = host.document;
-    this.iframe = document.createElement('iframe'); this.iframe.title = `BAP component ${options.id}`;
+    this.iframe = document.createElement('iframe'); this.iframe.src = options.src; this.iframe.title = `BAP component ${options.id}`;
     this.iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin'); this.iframe.style.border = '0'; this.iframe.style.display = 'block';
     this.iframe.addEventListener('load', () => this.beginHandshake()); this.iframe.addEventListener('error', () => this.fail(bapError('INTERNAL_ERROR', 'Component iframe failed to load')));
     if (options.size) this.setSize(options.size); options.container.appendChild(this.iframe);
-    this.iframe.src = options.src;
     this.handshakeTimer = setTimeout(() => { if (this.state === 'created' || this.state === 'connected') this.fail(bapError('TIMEOUT', 'Component load or handshake timed out', { id: this.id })); }, host.handshakeTimeoutMs);
   }
   on(name: string, listener: Listener): () => void { const set = this.listeners.get(name) ?? new Set<Listener>(); set.add(listener); this.listeners.set(name, set); return () => set.delete(listener); }
