@@ -3,7 +3,7 @@ import { BapError, HelloAckResult, HelloPayload, Manifest, Message, PROTOCOL, ev
 export type ComponentState = 'created' | 'connected' | 'initialized' | 'running' | 'paused' | 'stopped' | 'failed';
 export interface Size { width: number; height: number; devicePixelRatio?: number }
 export interface HostOptions { implementationId?: string; implementationName?: string; implementationVersion?: string; capabilities?: string[]; permissions?: string[]; handshakeTimeoutMs?: number; targetOrigin?: string; window?: Window; document?: Document; }
-export interface ComponentOptions { id: string; src: string; container: HTMLElement; size?: Size; allowedOrigin?: string; }
+export interface ComponentOptions { id: string; src?: string; srcdoc?: string; container: HTMLElement; size?: Size; allowedOrigin?: string; }
 type Listener = (value: unknown) => void;
 const bapError = (code: BapError['code'], message: string, details?: Record<string, unknown>): BapError => ({ code, message, ...(details ? { details } : {}) });
 
@@ -19,14 +19,21 @@ export class ComponentHandle {
   private handshakeTimer?: ReturnType<typeof setTimeout>;
   private expectedOrigin: string;
   private readonly fileSource: boolean;
+  private readonly inlineSource: boolean;
 
   constructor(private readonly host: HostRuntime, readonly id: string, options: ComponentOptions) {
-    this.fileSource = new URL(options.src, host.document.baseURI).protocol === 'file:';
-    this.expectedOrigin = options.allowedOrigin ?? host.targetOrigin;
-    if (this.expectedOrigin === '*') { try { this.expectedOrigin = new URL(options.src, host.document.baseURI).origin; } catch { /* test document */ } }
+    this.inlineSource = options.srcdoc !== undefined;
+    if (this.inlineSource === (options.src !== undefined)) throw new TypeError('Exactly one of src or srcdoc is required');
+    if (this.inlineSource && (typeof options.srcdoc !== 'string' || !options.srcdoc.trim())) throw new TypeError('srcdoc must be non-empty HTML');
+    if (this.inlineSource && options.allowedOrigin !== undefined && options.allowedOrigin !== 'null') throw new TypeError('srcdoc requires an opaque origin');
+    this.fileSource = !this.inlineSource && new URL(options.src!, host.document.baseURI).protocol === 'file:';
+    this.expectedOrigin = this.inlineSource ? 'null' : options.allowedOrigin ?? host.targetOrigin;
+    if (!this.inlineSource && this.expectedOrigin === '*') { try { this.expectedOrigin = new URL(options.src!, host.document.baseURI).origin; } catch { /* test document */ } }
     const document = host.document;
-    this.iframe = document.createElement('iframe'); this.iframe.src = options.src; this.iframe.title = `BAP component ${options.id}`;
-    this.iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin'); this.iframe.style.border = '0'; this.iframe.style.display = 'block';
+    this.iframe = document.createElement('iframe');
+    if (this.inlineSource) this.iframe.srcdoc = options.srcdoc!; else this.iframe.src = options.src!;
+    this.iframe.title = `BAP component ${options.id}`;
+    this.iframe.setAttribute('sandbox', this.inlineSource ? 'allow-scripts' : 'allow-scripts allow-same-origin'); this.iframe.style.border = '0'; this.iframe.style.display = 'block';
     this.iframe.addEventListener('load', () => this.beginHandshake()); this.iframe.addEventListener('error', () => this.fail(bapError('INTERNAL_ERROR', 'Component iframe failed to load')));
     if (options.size) this.setSize(options.size); options.container.appendChild(this.iframe);
     this.handshakeTimer = setTimeout(() => { if (this.state === 'created' || this.state === 'connected') this.fail(bapError('TIMEOUT', 'Component load or handshake timed out', { id: this.id })); }, host.handshakeTimeoutMs);
@@ -69,7 +76,7 @@ export class ComponentHandle {
   }
   private sendLifecycle(method: 'initialize' | 'start' | 'pause' | 'resume' | 'stop'): void { const message = request(method, {}, this.sessionId); this.pendingRequests.set(message.id, method); this.send(message); }
   private sendEvent(name: string, payload: object): void { this.send(event(name, payload, this.sessionId)); }
-  private send(message: Message): void { this.iframe.contentWindow?.postMessage(message, this.host.targetOrigin); }
+  private send(message: Message): void { this.iframe.contentWindow?.postMessage(message, this.inlineSource ? '*' : this.host.targetOrigin); }
   private finishStop(): void { if (this.state === 'stopped') return; clearTimeout(this.handshakeTimer); this.state = 'stopped'; this.iframe.remove(); this.emit('stopped', undefined); }
   private fail(fault: BapError): void { if (this.state === 'failed' || this.state === 'stopped') return; clearTimeout(this.handshakeTimer); this.state = 'failed'; this.iframe.style.display = 'none'; this.emit('fault', fault); this.host.emit('componentFault', { id: this.id, error: fault }); }
   private emit(name: string, value: unknown): void { for (const listener of this.listeners.get(name) ?? []) listener(value); }

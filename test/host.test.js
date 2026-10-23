@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { HostRuntime, isManifest } from '../dist/index.js';
 
 class FakeWindow { listeners = new Map(); addEventListener(name, fn) { this.listeners.set(name, fn); } dispatch(event) { this.listeners.get(event.type)?.(event); } }
-class FakeIframe { style = {}; contentWindow = { messages: [], postMessage: (message, origin) => this.contentWindow.messages.push({ message, origin }) }; listeners = new Map(); setAttribute() {} addEventListener(name, fn) { this.listeners.set(name, fn); } remove() { this.removed = true; } load() { this.listeners.get('load')?.(); } }
+class FakeIframe { style = {}; attributes = new Map(); contentWindow = { messages: [], postMessage: (message, origin) => this.contentWindow.messages.push({ message, origin }) }; listeners = new Map(); setAttribute(name, value) { this.attributes.set(name, value); } addEventListener(name, fn) { this.listeners.set(name, fn); } remove() { this.removed = true; } load() { this.listeners.get('load')?.(); } }
 class FakeDocument { baseURI = 'https://wallpaper.test/'; createElement() { return new FakeIframe(); } }
 class Container { children = []; appendChild(child) { this.children.push(child); } }
 const response = (correlationId, result, sessionId = 'session-1') => ({ protocol: { name: 'bap', version: '0.1.0', profile: 'core' }, kind: 'response', id: `response-${correlationId}`, correlationId, timestamp: new Date().toISOString(), sessionId, ok: true, result });
@@ -82,5 +82,34 @@ test('accepts opaque CEF event origin when URL reports file://', () => {
   const hello = component.iframe.contentWindow.messages[0].message;
   window.dispatch({ type: 'message', origin: 'null', source: component.iframe.contentWindow, data: response(hello.id, { protocol: hello.protocol, capabilities: [], permissions: [], sessionId: 's' }) });
   assert.equal(component.iframe.contentWindow.messages.at(-1).message.method, 'initialize');
+  host.destroy();
+});
+
+test('mounts inline HTML with an opaque origin and only script sandbox permission', () => {
+  const window = new FakeWindow();
+  const host = new HostRuntime({ window, document: new FakeDocument(), targetOrigin: 'https://component.test' });
+  const html = '<!doctype html><title>Clock</title>';
+  const component = host.mount({ id: 'clock', srcdoc: html, container: new Container() });
+  assert.equal(component.iframe.srcdoc, html);
+  assert.equal(component.iframe.attributes.get('sandbox'), 'allow-scripts');
+  assert.equal(component.acceptsOrigin('null'), true);
+  assert.equal(component.acceptsOrigin('https://component.test'), false);
+  component.iframe.load();
+  const hello = component.iframe.contentWindow.messages[0];
+  assert.equal(hello.origin, '*');
+  window.dispatch({ type: 'message', origin: 'https://component.test', source: component.iframe.contentWindow, data: response(hello.message.id, { protocol: hello.message.protocol, capabilities: [], permissions: [], sessionId: 's' }) });
+  assert.equal(component.state, 'connected');
+  window.dispatch({ type: 'message', origin: 'null', source: component.iframe.contentWindow, data: response(hello.message.id, { protocol: hello.message.protocol, capabilities: [], permissions: [], sessionId: 's' }) });
+  assert.equal(component.iframe.contentWindow.messages.at(-1).message.method, 'initialize');
+  host.destroy();
+});
+
+test('rejects ambiguous or non-isolated inline component sources', () => {
+  const host = new HostRuntime({ window: new FakeWindow(), document: new FakeDocument() });
+  const container = new Container();
+  assert.throws(() => host.mount({ id: 'clock', container }), /Exactly one/);
+  assert.throws(() => host.mount({ id: 'clock', src: 'clock.html', srcdoc: '<p>clock</p>', container }), /Exactly one/);
+  assert.throws(() => host.mount({ id: 'clock', srcdoc: '', container }), /non-empty/);
+  assert.throws(() => host.mount({ id: 'clock', srcdoc: '<p>clock</p>', allowedOrigin: '*', container }), /opaque origin/);
   host.destroy();
 });

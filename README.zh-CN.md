@@ -12,6 +12,17 @@ MVP 提供：
 - 单组件故障隔离；
 - Wallpaper Engine 适配边界。
 
+在 Wallpaper Engine 中，可将从 Companion 获取的自包含嵌入文档挂载到当前
+壁纸，而无需创建另一项壁纸项目：
+
+```js
+host.mount({ id: manifest.id, srcdoc: embeddedHtml, container });
+```
+
+`srcdoc` iframe 使用 `sandbox="allow-scripts"` 和不透明 Origin。SDK 校验
+iframe 窗口，只接受该窗口以 `null` Origin 发送的 BAP 消息。其他环境仍可
+使用 URL 形式的 `src`。`src` 与 `srcdoc` 必须且只能提供一个。
+
 消息信封集中保存在 `src/protocol.ts` 中。它只是传输映射，不是第二套协议
 定义。规范性 Schema 和 Profile 名称应来自发布后的同级 [`spec`](../spec)
 仓库。
