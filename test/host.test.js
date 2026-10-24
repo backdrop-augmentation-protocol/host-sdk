@@ -34,6 +34,33 @@ test('uses the Core Profile envelope and completes helloAck, initialize, and sta
   assert.equal(component.state, 'running'); assert.deepEqual(component.capabilities, ['lifecycle']); host.destroy();
 });
 
+test('runs two component sessions independently and isolates a later fault', () => {
+  const window = new FakeWindow();
+  const host = new HostRuntime({ window, document: new FakeDocument(), targetOrigin: 'https://component.test' });
+  const mounts = ['clock', 'calendar'].map(id => host.mount({ id, src: `https://component.test/${id}.html`, container: new Container() }));
+  for (const component of mounts) component.iframe.load();
+  const answer = (component, request, result, session) => window.dispatch({
+    type: 'message', origin: 'https://component.test', source: component.iframe.contentWindow,
+    data: response(request.id, result, session)
+  });
+  for (const [index, component] of mounts.entries()) {
+    const session = `session-${index + 1}`;
+    const hello = component.iframe.contentWindow.messages.at(-1).message;
+    answer(component, hello, { protocol: hello.protocol, capabilities: [], permissions: [], sessionId: session }, session);
+    const initialize = component.iframe.contentWindow.messages.at(-1).message;
+    assert.equal(initialize.method, 'initialize');
+    answer(component, initialize, {}, session);
+    const start = component.iframe.contentWindow.messages.at(-1).message;
+    assert.equal(start.method, 'start');
+    answer(component, start, {}, session);
+  }
+  assert.deepEqual(mounts.map(component => component.state), ['running', 'running']);
+  window.dispatch({ type: 'message', origin: 'https://component.test', source: mounts[0].iframe.contentWindow,
+    data: { ...event('component.fault', { message: 'clock failed' }), sessionId: 'session-1' } });
+  assert.deepEqual(mounts.map(component => component.state), ['failed', 'running']);
+  host.destroy();
+});
+
 test('uses lifecycle requests for pause/resume/stop and propagates size events', () => {
   const window = new FakeWindow(); const host = new HostRuntime({ window, document: new FakeDocument(), targetOrigin: 'https://component.test' });
   const component = host.mount({ id: 'a', src: 'https://component.test/a', container: new Container() }); component.iframe.load();
