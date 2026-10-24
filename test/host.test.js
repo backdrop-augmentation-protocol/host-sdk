@@ -61,6 +61,22 @@ test('runs two component sessions independently and isolates a later fault', () 
   host.destroy();
 });
 
+test('unmounts one component immediately so a preset can replace it', () => {
+  const host = new HostRuntime({ window: new FakeWindow(), document: new FakeDocument() });
+  const a = host.mount({ id: 'clock', srcdoc: '<title>Clock</title>', container: new Container() });
+  const b = host.mount({ id: 'calendar', srcdoc: '<title>Calendar</title>', container: new Container() });
+  host.unmount('clock');
+  assert.equal(a.state, 'stopped');
+  assert.equal(a.iframe.removed, true);
+  assert.equal(host.get('clock'), undefined);
+  assert.equal(host.get('calendar'), b);
+  const replacement = host.mount({ id: 'clock', srcdoc: '<title>Replacement</title>', container: new Container() });
+  assert.notEqual(replacement, a);
+  host.destroy();
+  assert.equal(replacement.iframe.removed, true);
+  assert.equal(b.iframe.removed, true);
+});
+
 test('uses lifecycle requests for pause/resume/stop and propagates size events', () => {
   const window = new FakeWindow(); const host = new HostRuntime({ window, document: new FakeDocument(), targetOrigin: 'https://component.test' });
   const component = host.mount({ id: 'a', src: 'https://component.test/a', container: new Container() }); component.iframe.load();

@@ -43,6 +43,7 @@ export class ComponentHandle {
   pause(): void { if (this.state === 'running') this.sendLifecycle('pause'); }
   resume(): void { if (this.state === 'paused') this.sendLifecycle('resume'); }
   stop(): void { if (this.state === 'stopped') return; if (['initialized', 'running', 'paused'].includes(this.state)) this.sendLifecycle('stop'); else this.finishStop(); }
+  dispose(): void { this.finishStop(); }
   acceptsOrigin(origin: string): boolean {
     if (this.expectedOrigin === '*' || origin === this.expectedOrigin) return true;
     // CEF and browsers disagree on which opaque origin string a file: frame
@@ -100,9 +101,10 @@ export class HostRuntime {
   emit(name: string, value: unknown): void { for (const listener of this.listeners.get(name) ?? []) listener(value); }
   mount(options: ComponentOptions): ComponentHandle { if (this.components.has(options.id)) throw new Error(`Component already mounted: ${options.id}`); const handle = new ComponentHandle(this, options.id, options); this.components.set(options.id, handle); handle.on('stopped', () => this.components.delete(options.id)); return handle; }
   get(id: string): ComponentHandle | undefined { return this.components.get(id); }
+  unmount(id: string): void { this.components.get(id)?.dispose(); }
   pauseAll(): void { for (const component of this.components.values()) component.pause(); }
   resumeAll(): void { for (const component of this.components.values()) component.resume(); }
   resizeAll(size: Size): void { for (const component of this.components.values()) component.setSize(size); }
-  destroy(): void { for (const component of this.components.values()) component.stop(); this.components.clear(); }
+  destroy(): void { for (const component of this.components.values()) component.dispose(); this.components.clear(); }
   private receive(event: MessageEvent): void { if (!isBapMessage(event.data)) return; for (const component of this.components.values()) if (event.source === component.iframe.contentWindow && component.acceptsOrigin(event.origin)) { component.receive(event.data); return; } }
 }
