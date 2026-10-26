@@ -52,7 +52,7 @@ export class ComponentHandle {
       && (origin === 'null' || origin === 'file://' || origin === '');
   }
   receive(message: Message): void {
-    if (message.sessionId && this.sessionId && message.sessionId !== this.sessionId) return;
+    if (this.sessionId && message.sessionId !== this.sessionId) return;
     if (message.kind === 'response') { if (message.correlationId === this.helloRequestId) return this.handleHelloResponse(message); return this.handleLifecycleResponse(message); }
     if (message.kind === 'event' && message.event === 'component.fault') this.fail(bapError('INTERNAL_ERROR', 'Component reported a fault', message.payload as Record<string, unknown> | undefined));
     if (message.event) this.emit(message.event, message.payload);
@@ -61,8 +61,9 @@ export class ComponentHandle {
   private handleHelloResponse(message: Message): void {
     if (message.ok !== true || !message.result) return this.fail(message.error ?? bapError('INVALID_MESSAGE', 'Invalid helloAck response'));
     const result = message.result as unknown as HelloAckResult;
-    if (result.protocol?.name !== PROTOCOL.name || result.protocol.profile !== PROTOCOL.profile || !result.sessionId) return this.fail(bapError('INVALID_MESSAGE', 'Invalid helloAck result'));
-    clearTimeout(this.handshakeTimer); this.sessionId = result.sessionId; this.capabilities = result.capabilities ?? []; this.grantedPermissions = result.permissions ?? []; this.sendLifecycle('initialize');
+    if (result.selectedProtocol?.name !== PROTOCOL.name || result.selectedProtocol.version !== PROTOCOL.version || result.selectedProtocol.profile !== PROTOCOL.profile || result.role !== 'component' || !message.sessionId || !Array.isArray(result.capabilities) || !Array.isArray(result.permissions)) return this.fail(bapError('INVALID_MESSAGE', 'Invalid helloAck result'));
+    if (result.capabilities.some(capability => !this.host.hello().capabilities.includes(capability)) || result.permissions.some(permission => !this.host.hello().requestedPermissions.includes(permission))) return this.fail(bapError('CAPABILITY_DENIED', 'Acknowledgement grants unrequested capability or permission'));
+    clearTimeout(this.handshakeTimer); this.sessionId = message.sessionId; this.capabilities = result.capabilities; this.grantedPermissions = result.permissions; this.sendLifecycle('initialize');
   }
   private handleLifecycleResponse(message: Message): void {
     if (message.ok !== true || !message.result) return this.fail(message.error ?? bapError('INVALID_MESSAGE', 'Invalid lifecycle response'));
@@ -96,7 +97,7 @@ export class HostRuntime {
     if (!isManifest(this.manifest)) throw new Error('Invalid Host manifest');
     this.messageListener = (event) => this.receive(event); win?.addEventListener('message', this.messageListener);
   }
-  hello(): HelloPayload { return { role: 'host', implementation: { id: this.options.implementationId, name: this.options.implementationName, version: this.options.implementationVersion }, supportedProtocols: [PROTOCOL], capabilities: this.options.capabilities, requestedPermissions: this.options.permissions }; }
+  hello(): HelloPayload { return { role: 'host', identity: { id: this.options.implementationId, name: this.options.implementationName, version: this.options.implementationVersion }, protocolVersions: [PROTOCOL.version], capabilities: this.options.capabilities, requestedPermissions: this.options.permissions }; }
   on(name: string, listener: Listener): () => void { const set = this.listeners.get(name) ?? new Set<Listener>(); set.add(listener); this.listeners.set(name, set); return () => set.delete(listener); }
   emit(name: string, value: unknown): void { for (const listener of this.listeners.get(name) ?? []) listener(value); }
   mount(options: ComponentOptions): ComponentHandle { if (this.components.has(options.id)) throw new Error(`Component already mounted: ${options.id}`); const handle = new ComponentHandle(this, options.id, options); this.components.set(options.id, handle); handle.on('stopped', () => this.components.delete(options.id)); return handle; }

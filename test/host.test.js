@@ -26,7 +26,8 @@ test('uses the Core Profile envelope and completes helloAck, initialize, and sta
   const component = host.mount({ id: 'clock', src: 'https://component.test/clock.html', container: new Container(), allowedOrigin: 'https://component.test' }); component.iframe.load();
   const hello = component.iframe.contentWindow.messages[0].message;
   assert.equal(hello.kind, 'request'); assert.equal(hello.method, 'hello'); assert.equal(hello.protocol.profile, 'core'); assert.ok(hello.timestamp); assert.equal(hello.payload.role, 'host');
-  window.dispatch({ type: 'message', origin: 'https://component.test', source: component.iframe.contentWindow, data: response(hello.id, { protocol: hello.protocol, capabilities: ['lifecycle'], permissions: [], sessionId: 'session-1' }) });
+  assert.deepEqual(hello.payload.protocolVersions, ['0.1.0']); assert.equal(hello.payload.identity.id, host.manifest.id);
+  window.dispatch({ type: 'message', origin: 'https://component.test', source: component.iframe.contentWindow, data: response(hello.id, { selectedProtocol: hello.protocol, role: 'component', capabilities: ['lifecycle'], permissions: [] }) });
   const initialize = component.iframe.contentWindow.messages.at(-1).message; assert.equal(initialize.method, 'initialize'); assert.equal(component.state, 'connected');
   window.dispatch({ type: 'message', origin: 'https://component.test', source: component.iframe.contentWindow, data: response(initialize.id, { method: 'initialize' }) });
   const start = component.iframe.contentWindow.messages.at(-1).message; assert.equal(start.method, 'start');
@@ -46,7 +47,7 @@ test('runs two component sessions independently and isolates a later fault', () 
   for (const [index, component] of mounts.entries()) {
     const session = `session-${index + 1}`;
     const hello = component.iframe.contentWindow.messages.at(-1).message;
-    answer(component, hello, { protocol: hello.protocol, capabilities: [], permissions: [], sessionId: session }, session);
+    answer(component, hello, { selectedProtocol: hello.protocol, role: 'component', capabilities: [], permissions: [] }, session);
     const initialize = component.iframe.contentWindow.messages.at(-1).message;
     assert.equal(initialize.method, 'initialize');
     answer(component, initialize, {}, session);
@@ -81,7 +82,7 @@ test('uses lifecycle requests for pause/resume/stop and propagates size events',
   const window = new FakeWindow(); const host = new HostRuntime({ window, document: new FakeDocument(), targetOrigin: 'https://component.test' });
   const component = host.mount({ id: 'a', src: 'https://component.test/a', container: new Container() }); component.iframe.load();
   const hello = component.iframe.contentWindow.messages[0].message;
-  window.dispatch({ type: 'message', origin: 'https://component.test', source: component.iframe.contentWindow, data: response(hello.id, { protocol: hello.protocol, capabilities: [], permissions: [], sessionId: 's' }) });
+  window.dispatch({ type: 'message', origin: 'https://component.test', source: component.iframe.contentWindow, data: response(hello.id, { selectedProtocol: hello.protocol, role: 'component', capabilities: [], permissions: [] }, 's') });
   let initialize = component.iframe.contentWindow.messages.at(-1).message; window.dispatch({ type: 'message', origin: 'https://component.test', source: component.iframe.contentWindow, data: response(initialize.id, {}, 's') });
   let start = component.iframe.contentWindow.messages.at(-1).message; window.dispatch({ type: 'message', origin: 'https://component.test', source: component.iframe.contentWindow, data: response(start.id, {}, 's') });
   host.resizeAll({ width: 800, height: 600 }); assert.equal(component.iframe.style.width, '800px'); assert.equal(component.iframe.contentWindow.messages.at(-1).message.event, 'host.size.changed');
@@ -109,7 +110,7 @@ test('accepts CEF file origins only for file-backed component frames', () => {
   assert.equal(component.acceptsOrigin('https://evil.test'), false);
   component.iframe.load();
   const hello = component.iframe.contentWindow.messages[0].message;
-  window.dispatch({ type: 'message', origin: 'file://', source: component.iframe.contentWindow, data: response(hello.id, { protocol: hello.protocol, capabilities: [], permissions: [], sessionId: 's' }) });
+  window.dispatch({ type: 'message', origin: 'file://', source: component.iframe.contentWindow, data: response(hello.id, { selectedProtocol: hello.protocol, role: 'component', capabilities: [], permissions: [] }, 's') });
   assert.equal(component.iframe.contentWindow.messages.at(-1).message.method, 'initialize');
   host.destroy();
 });
@@ -123,7 +124,7 @@ test('accepts opaque CEF event origin when URL reports file://', () => {
   assert.equal(component.acceptsOrigin('https://evil.test'), false);
   component.iframe.load();
   const hello = component.iframe.contentWindow.messages[0].message;
-  window.dispatch({ type: 'message', origin: 'null', source: component.iframe.contentWindow, data: response(hello.id, { protocol: hello.protocol, capabilities: [], permissions: [], sessionId: 's' }) });
+  window.dispatch({ type: 'message', origin: 'null', source: component.iframe.contentWindow, data: response(hello.id, { selectedProtocol: hello.protocol, role: 'component', capabilities: [], permissions: [] }, 's') });
   assert.equal(component.iframe.contentWindow.messages.at(-1).message.method, 'initialize');
   host.destroy();
 });
@@ -140,9 +141,9 @@ test('mounts inline HTML with an opaque origin and only script sandbox permissio
   component.iframe.load();
   const hello = component.iframe.contentWindow.messages[0];
   assert.equal(hello.origin, '*');
-  window.dispatch({ type: 'message', origin: 'https://component.test', source: component.iframe.contentWindow, data: response(hello.message.id, { protocol: hello.message.protocol, capabilities: [], permissions: [], sessionId: 's' }) });
+  window.dispatch({ type: 'message', origin: 'https://component.test', source: component.iframe.contentWindow, data: response(hello.message.id, { selectedProtocol: hello.message.protocol, role: 'component', capabilities: [], permissions: [] }, 's') });
   assert.equal(component.state, 'connected');
-  window.dispatch({ type: 'message', origin: 'null', source: component.iframe.contentWindow, data: response(hello.message.id, { protocol: hello.message.protocol, capabilities: [], permissions: [], sessionId: 's' }) });
+  window.dispatch({ type: 'message', origin: 'null', source: component.iframe.contentWindow, data: response(hello.message.id, { selectedProtocol: hello.message.protocol, role: 'component', capabilities: [], permissions: [] }, 's') });
   assert.equal(component.iframe.contentWindow.messages.at(-1).message.method, 'initialize');
   host.destroy();
 });
