@@ -1,7 +1,7 @@
 {
   "name": "@backdrop-augmentation-protocol/host-sdk",
   "version": "0.1.0",
-  "private": true,
+  "publishConfig": { "access": "public" },
   "type": "module",
   "types": "./dist/index.d.ts",
   "files": ["dist/", "README.md", "README.zh-CN.md"],
