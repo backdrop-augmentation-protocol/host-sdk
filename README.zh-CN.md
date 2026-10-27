@@ -4,6 +4,8 @@
 
 面向 BAP Embedded Mode 组件的最小 TypeScript Web Host 运行时。
 
+通过 `npm install @backdrop-augmentation-protocol/host-sdk` 安装。
+
 MVP 提供：
 
 - iframe + `postMessage` 隔离；
@@ -23,9 +25,8 @@ host.mount({ id: manifest.id, srcdoc: embeddedHtml, container });
 iframe 窗口，只接受该窗口以 `null` Origin 发送的 BAP 消息。其他环境仍可
 使用 URL 形式的 `src`。`src` 与 `srcdoc` 必须且只能提供一个。
 
-消息信封集中保存在 `src/protocol.ts` 中。它只是传输映射，不是第二套协议
-定义。规范性 Schema 和 Profile 名称应来自发布后的同级 [`spec`](../spec)
-仓库。
+消息映射遵循 [`spec`](https://github.com/backdrop-augmentation-protocol/spec)
+中的规范性 Schema 和 Profile。
 
 ```sh
 npm install
