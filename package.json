@@ -3,12 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "types": "./dist/index.d.ts",
+  "files": ["dist/", "README.md", "README.zh-CN.md"],
   "exports": {
     ".": "./dist/index.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "npm run build && node --test test/*.test.js"
+    "test": "npm run build && node --test test/*.test.js",
+    "check:package": "node scripts/check-package.mjs"
   },
   "devDependencies": {
     "typescript": "^5.7.2"
