@@ -85,6 +85,32 @@ test('distinguishes repeated component packages by stable instance ID and negoti
   host.destroy();
 });
 
+test('delivers initial and updated configuration only to the negotiated component instance', () => {
+  const window = new FakeWindow();
+  const extension = { id: 'org.bap.component-config', versions: ['0.1.0'] };
+  const host = new HostRuntime({ window, document: new FakeDocument(), extensions: [extension] });
+  const component = host.mount({ instanceId: 'clock-a', componentId: 'org.example.clock', srcdoc: '<p>A</p>', container: new Container(), config: { format: '24h' }, configRevision: 3 });
+  component.iframe.load();
+  const hello = component.iframe.contentWindow.messages[0].message;
+  assert.equal(hello.payload.instanceId, 'clock-a');
+  const respond = (message, result) => window.dispatch({ type: 'message', origin: 'null', source: component.iframe.contentWindow, data: response(message.id, result) });
+  respond(hello, { selectedProtocol: hello.protocol, role: 'component', capabilities: [], permissions: [], selectedExtensions: [{ id: extension.id, version: '0.1.0' }] });
+  let lifecycle = component.iframe.contentWindow.messages.at(-1).message;
+  respond(lifecycle, {});
+  lifecycle = component.iframe.contentWindow.messages.at(-1).message;
+  respond(lifecycle, {});
+  let delivered = component.iframe.contentWindow.messages.at(-1).message;
+  assert.equal(delivered.event, 'component.config.changed');
+  assert.deepEqual(delivered.payload, { instanceId: 'clock-a', revision: 3, config: { format: '24h' } });
+  assert.equal(host.updateConfig('clock-a', { format: '12h' }, 4), true);
+  delivered = component.iframe.contentWindow.messages.at(-1).message;
+  assert.equal(delivered.payload.revision, 4);
+  assert.deepEqual(delivered.payload.config, { format: '12h' });
+  assert.equal(host.updateConfig('clock-a', { format: 'ignored' }, 4), false);
+  assert.equal(host.updateConfig('missing', {}, 5), false);
+  host.destroy();
+});
+
 test('unmounts one component immediately so a preset can replace it', () => {
   const host = new HostRuntime({ window: new FakeWindow(), document: new FakeDocument() });
   const a = host.mount({ id: 'clock', srcdoc: '<title>Clock</title>', container: new Container() });
