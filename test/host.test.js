@@ -38,7 +38,7 @@ test('uses the Core Profile envelope and completes helloAck, initialize, and sta
 test('runs two component sessions independently and isolates a later fault', () => {
   const window = new FakeWindow();
   const host = new HostRuntime({ window, document: new FakeDocument(), targetOrigin: 'https://component.test' });
-  const mounts = ['clock', 'calendar'].map(id => host.mount({ id, src: `https://component.test/${id}.html`, container: new Container() }));
+  const mounts = ['clock-left', 'clock-right'].map(instanceId => host.mount({ instanceId, componentId: 'org.example.clock', src: `https://component.test/${instanceId}.html`, container: new Container() }));
   for (const component of mounts) component.iframe.load();
   const answer = (component, request, result, session) => window.dispatch({
     type: 'message', origin: 'https://component.test', source: component.iframe.contentWindow,
@@ -59,6 +59,28 @@ test('runs two component sessions independently and isolates a later fault', () 
   window.dispatch({ type: 'message', origin: 'https://component.test', source: mounts[0].iframe.contentWindow,
     data: { ...event('component.fault', { message: 'clock failed' }), sessionId: 'session-1' } });
   assert.deepEqual(mounts.map(component => component.state), ['failed', 'running']);
+  host.destroy();
+});
+
+test('distinguishes repeated component packages by stable instance ID and negotiates only offered extensions', () => {
+  const window = new FakeWindow();
+  const extension = { id: 'org.bap.composition', versions: ['0.1.0'] };
+  const host = new HostRuntime({ window, document: new FakeDocument(), extensions: [extension] });
+  const a = host.mount({ instanceId: 'clock-a', componentId: 'org.example.clock', srcdoc: '<p>A</p>', container: new Container() });
+  const b = host.mount({ instanceId: 'clock-b', componentId: 'org.example.clock', srcdoc: '<p>B</p>', container: new Container() });
+  assert.notEqual(a, b);
+  assert.equal(host.get('clock-a'), a);
+  assert.equal(host.get('clock-b'), b);
+  assert.throws(() => host.mount({ instanceId: 'clock-a', componentId: 'org.example.clock', srcdoc: '<p>duplicate</p>', container: new Container() }), /already mounted/);
+
+  a.iframe.load();
+  const hello = a.iframe.contentWindow.messages[0].message;
+  assert.deepEqual(hello.payload.extensions, [extension]);
+  const acknowledgement = response(hello.id, { selectedProtocol: hello.protocol, role: 'component', capabilities: [], permissions: [], selectedExtensions: [extension] });
+  acknowledgement.result.selectedExtensions = [{ id: 'org.bap.unoffered', version: '0.1.0' }];
+  window.dispatch({ type: 'message', origin: 'null', source: a.iframe.contentWindow, data: acknowledgement });
+  assert.equal(a.state, 'failed');
+  assert.equal(b.state, 'created');
   host.destroy();
 });
 

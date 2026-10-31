@@ -6,19 +6,21 @@ Minimal TypeScript Web Host runtime for BAP Embedded Mode components.
 
 Install with `npm install @backdrop-augmentation-protocol/host-sdk`.
 
-The MVP provides:
+The SDK provides:
 
 - iframe + `postMessage` isolation;
 - handshake and capability negotiation;
 - lifecycle, size, pause and resume propagation;
 - per-component fault isolation;
+- distinct `instanceId` and `componentId` identities, including repeated instances of one component;
+- optional exact-version extension negotiation;
 - a small adapter boundary for Wallpaper Engine.
 
 For Wallpaper Engine, mount a self-contained embedded document received from
 the Companion without creating another wallpaper project:
 
 ```js
-host.mount({ id: manifest.id, srcdoc: embeddedHtml, container });
+host.mount({ instanceId: 'clock-primary', componentId: manifest.id, srcdoc: embeddedHtml, container });
 ```
 
 `srcdoc` frames use `sandbox="allow-scripts"` and an opaque origin. The SDK

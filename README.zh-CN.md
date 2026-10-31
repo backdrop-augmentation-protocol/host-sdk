@@ -6,19 +6,21 @@
 
 通过 `npm install @backdrop-augmentation-protocol/host-sdk` 安装。
 
-MVP 提供：
+SDK 提供：
 
 - iframe + `postMessage` 隔离；
 - 握手与能力协商；
 - 生命周期、尺寸、暂停和恢复传播；
 - 单组件故障隔离；
+- 分离 `instanceId` 与 `componentId`，允许同一组件创建多个实例；
+- 可选的精确版本扩展协商；
 - Wallpaper Engine 适配边界。
 
 在 Wallpaper Engine 中，可将从 Companion 获取的自包含嵌入文档挂载到当前
 壁纸，而无需创建另一项壁纸项目：
 
 ```js
-host.mount({ id: manifest.id, srcdoc: embeddedHtml, container });
+host.mount({ instanceId: 'clock-primary', componentId: manifest.id, srcdoc: embeddedHtml, container });
 ```
 
 `srcdoc` iframe 使用 `sandbox="allow-scripts"` 和不透明 Origin。SDK 校验

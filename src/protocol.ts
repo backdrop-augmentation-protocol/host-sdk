@@ -6,8 +6,10 @@ export type Role = 'host' | 'component' | 'companion';
 export type ErrorCode = 'INVALID_MESSAGE' | 'UNSUPPORTED_VERSION' | 'UNSUPPORTED_PROFILE' | 'UNAUTHORIZED' | 'CAPABILITY_DENIED' | 'INVALID_STATE' | 'NOT_FOUND' | 'CONFLICT' | 'TIMEOUT' | 'INTERNAL_ERROR';
 export interface BapError { code: ErrorCode; message: string; retryable?: boolean; details?: Record<string, unknown>; }
 export interface Message<T = object> { protocol: Protocol; kind: MessageKind; id: string; sessionId?: string; correlationId?: string; timestamp: string; method?: string; event?: string; payload?: T; ok?: boolean; result?: Record<string, unknown>; error?: BapError; }
-export interface HelloPayload { role: 'host'; identity: { id: string; name: string; version: string }; protocolVersions: string[]; capabilities: string[]; requestedPermissions: string[]; }
-export interface HelloAckResult { selectedProtocol: Protocol; role: 'component'; capabilities: string[]; permissions: string[]; }
+export interface ExtensionOffer { id: string; versions: string[]; }
+export interface SelectedExtension { id: string; version: string; }
+export interface HelloPayload { role: 'host'; identity: { id: string; name: string; version: string }; protocolVersions: string[]; capabilities: string[]; requestedPermissions: string[]; extensions?: ExtensionOffer[]; }
+export interface HelloAckResult { selectedProtocol: Protocol; role: 'component'; capabilities: string[]; permissions: string[]; selectedExtensions?: SelectedExtension[]; }
 export interface Manifest {
   protocol: Protocol;
   id: string;

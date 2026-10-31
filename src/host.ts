@@ -1,17 +1,21 @@
-import { BapError, HelloAckResult, HelloPayload, Manifest, Message, PROTOCOL, event, isBapMessage, isManifest, request } from './protocol.js';
+import { BapError, ExtensionOffer, HelloAckResult, HelloPayload, Manifest, Message, PROTOCOL, SelectedExtension, event, isBapMessage, isManifest, request } from './protocol.js';
 
 export type ComponentState = 'created' | 'connected' | 'initialized' | 'running' | 'paused' | 'stopped' | 'failed';
 export interface Size { width: number; height: number; devicePixelRatio?: number }
-export interface HostOptions { implementationId?: string; implementationName?: string; implementationVersion?: string; capabilities?: string[]; permissions?: string[]; handshakeTimeoutMs?: number; targetOrigin?: string; window?: Window; document?: Document; }
-export interface ComponentOptions { id: string; src?: string; srcdoc?: string; container: HTMLElement; size?: Size; allowedOrigin?: string; }
+export interface HostOptions { implementationId?: string; implementationName?: string; implementationVersion?: string; capabilities?: string[]; permissions?: string[]; extensions?: ExtensionOffer[]; handshakeTimeoutMs?: number; targetOrigin?: string; window?: Window; document?: Document; }
+export interface ComponentOptions { instanceId?: string; componentId?: string; sourceKey?: string; /** @deprecated Use instanceId and componentId separately. */ id?: string; src?: string; srcdoc?: string; container: HTMLElement; size?: Size; allowedOrigin?: string; }
 type Listener = (value: unknown) => void;
 const bapError = (code: BapError['code'], message: string, details?: Record<string, unknown>): BapError => ({ code, message, ...(details ? { details } : {}) });
 
 export class ComponentHandle {
   readonly iframe: HTMLIFrameElement;
+  readonly instanceId: string;
+  readonly componentId: string;
+  readonly sourceKey?: string;
   state: ComponentState = 'created';
   capabilities: string[] = [];
   grantedPermissions: string[] = [];
+  selectedExtensions: SelectedExtension[] = [];
   sessionId?: string;
   private helloRequestId?: string;
   private readonly pendingRequests = new Map<string, 'initialize' | 'start' | 'pause' | 'resume' | 'stop'>();
@@ -21,7 +25,12 @@ export class ComponentHandle {
   private readonly fileSource: boolean;
   private readonly inlineSource: boolean;
 
-  constructor(private readonly host: HostRuntime, readonly id: string, options: ComponentOptions) {
+  constructor(private readonly host: HostRuntime, options: ComponentOptions) {
+    this.instanceId = options.instanceId ?? options.id ?? '';
+    this.componentId = options.componentId ?? options.id ?? this.instanceId;
+    this.sourceKey = options.sourceKey;
+    if (!this.instanceId.trim()) throw new TypeError('instanceId is required');
+    if (!this.componentId.trim()) throw new TypeError('componentId is required');
     this.inlineSource = options.srcdoc !== undefined;
     if (this.inlineSource === (options.src !== undefined)) throw new TypeError('Exactly one of src or srcdoc is required');
     if (this.inlineSource && (typeof options.srcdoc !== 'string' || !options.srcdoc.trim())) throw new TypeError('srcdoc must be non-empty HTML');
@@ -32,12 +41,14 @@ export class ComponentHandle {
     const document = host.document;
     this.iframe = document.createElement('iframe');
     if (this.inlineSource) this.iframe.srcdoc = options.srcdoc!; else this.iframe.src = options.src!;
-    this.iframe.title = `BAP component ${options.id}`;
+    this.iframe.title = `BAP component ${this.componentId} (${this.instanceId})`;
     this.iframe.setAttribute('sandbox', this.inlineSource ? 'allow-scripts' : 'allow-scripts allow-same-origin'); this.iframe.style.border = '0'; this.iframe.style.display = 'block';
     this.iframe.addEventListener('load', () => this.beginHandshake()); this.iframe.addEventListener('error', () => this.fail(bapError('INTERNAL_ERROR', 'Component iframe failed to load')));
     if (options.size) this.setSize(options.size); options.container.appendChild(this.iframe);
-    this.handshakeTimer = setTimeout(() => { if (this.state === 'created' || this.state === 'connected') this.fail(bapError('TIMEOUT', 'Component load or handshake timed out', { id: this.id })); }, host.handshakeTimeoutMs);
+    this.handshakeTimer = setTimeout(() => { if (this.state === 'created' || this.state === 'connected') this.fail(bapError('TIMEOUT', 'Component load or handshake timed out', { instanceId: this.instanceId, componentId: this.componentId })); }, host.handshakeTimeoutMs);
   }
+  /** @deprecated Use instanceId. */
+  get id(): string { return this.instanceId; }
   on(name: string, listener: Listener): () => void { const set = this.listeners.get(name) ?? new Set<Listener>(); set.add(listener); this.listeners.set(name, set); return () => set.delete(listener); }
   setSize(size: Size): void { this.iframe.style.width = `${size.width}px`; this.iframe.style.height = `${size.height}px`; if (['initialized', 'running', 'paused'].includes(this.state)) this.sendEvent('host.size.changed', size); }
   pause(): void { if (this.state === 'running') this.sendLifecycle('pause'); }
@@ -63,7 +74,9 @@ export class ComponentHandle {
     const result = message.result as unknown as HelloAckResult;
     if (result.selectedProtocol?.name !== PROTOCOL.name || result.selectedProtocol.version !== PROTOCOL.version || result.selectedProtocol.profile !== PROTOCOL.profile || result.role !== 'component' || !message.sessionId || !Array.isArray(result.capabilities) || !Array.isArray(result.permissions)) return this.fail(bapError('INVALID_MESSAGE', 'Invalid helloAck result'));
     if (result.capabilities.some(capability => !this.host.hello().capabilities.includes(capability)) || result.permissions.some(permission => !this.host.hello().requestedPermissions.includes(permission))) return this.fail(bapError('CAPABILITY_DENIED', 'Acknowledgement grants unrequested capability or permission'));
-    clearTimeout(this.handshakeTimer); this.sessionId = message.sessionId; this.capabilities = result.capabilities; this.grantedPermissions = result.permissions; this.sendLifecycle('initialize');
+    const selectedExtensions = result.selectedExtensions ?? [];
+    if (!Array.isArray(selectedExtensions) || !this.host.acceptsSelectedExtensions(selectedExtensions)) return this.fail(bapError('CAPABILITY_DENIED', 'Acknowledgement selects an unoffered or invalid extension'));
+    clearTimeout(this.handshakeTimer); this.sessionId = message.sessionId; this.capabilities = result.capabilities; this.grantedPermissions = result.permissions; this.selectedExtensions = selectedExtensions; this.sendLifecycle('initialize');
   }
   private handleLifecycleResponse(message: Message): void {
     if (message.ok !== true || !message.result) return this.fail(message.error ?? bapError('INVALID_MESSAGE', 'Invalid lifecycle response'));
@@ -80,29 +93,37 @@ export class ComponentHandle {
   private sendEvent(name: string, payload: object): void { this.send(event(name, payload, this.sessionId)); }
   private send(message: Message): void { this.iframe.contentWindow?.postMessage(message, this.inlineSource ? '*' : this.host.targetOrigin); }
   private finishStop(): void { if (this.state === 'stopped') return; clearTimeout(this.handshakeTimer); this.state = 'stopped'; this.iframe.remove(); this.emit('stopped', undefined); }
-  private fail(fault: BapError): void { if (this.state === 'failed' || this.state === 'stopped') return; clearTimeout(this.handshakeTimer); this.state = 'failed'; this.iframe.style.display = 'none'; this.emit('fault', fault); this.host.emit('componentFault', { id: this.id, error: fault }); }
+  private fail(fault: BapError): void { if (this.state === 'failed' || this.state === 'stopped') return; clearTimeout(this.handshakeTimer); this.state = 'failed'; this.iframe.style.display = 'none'; this.emit('fault', fault); this.host.emit('componentFault', { id: this.instanceId, instanceId: this.instanceId, componentId: this.componentId, error: fault }); }
   private emit(name: string, value: unknown): void { for (const listener of this.listeners.get(name) ?? []) listener(value); }
 }
 
 export class HostRuntime {
   readonly document: Document; readonly targetOrigin: string; readonly handshakeTimeoutMs: number;
   readonly manifest: Manifest;
-  private readonly options: Required<Pick<HostOptions, 'implementationId' | 'implementationName' | 'implementationVersion' | 'capabilities' | 'permissions'>>;
+  private readonly options: Required<Pick<HostOptions, 'implementationId' | 'implementationName' | 'implementationVersion' | 'capabilities' | 'permissions' | 'extensions'>>;
   private readonly components = new Map<string, ComponentHandle>(); private readonly listeners = new Map<string, Set<Listener>>(); private readonly messageListener: (event: MessageEvent) => void;
   constructor(options: HostOptions = {}) {
     const win = options.window ?? globalThis.window; this.document = options.document ?? win?.document; if (!this.document) throw new Error('HostRuntime requires a browser document');
     this.targetOrigin = options.targetOrigin ?? '*'; this.handshakeTimeoutMs = options.handshakeTimeoutMs ?? 5000;
-    this.options = { implementationId: options.implementationId ?? 'bap.host-sdk', implementationName: options.implementationName ?? 'BAP Host SDK', implementationVersion: options.implementationVersion ?? '0.1.0', capabilities: options.capabilities ?? ['lifecycle', 'size', 'pause-resume'], permissions: options.permissions ?? [] };
+    this.options = { implementationId: options.implementationId ?? 'bap.host-sdk', implementationName: options.implementationName ?? 'BAP Host SDK', implementationVersion: options.implementationVersion ?? '0.1.0', capabilities: options.capabilities ?? ['lifecycle', 'size', 'pause-resume'], permissions: options.permissions ?? [], extensions: options.extensions ?? [] };
     this.manifest = { protocol: PROTOCOL, id: this.options.implementationId, name: this.options.implementationName, version: this.options.implementationVersion, implementationVersion: this.options.implementationVersion, role: 'host', capabilities: this.options.capabilities, permissions: this.options.permissions, entrypoints: { default: 'index.html' }, configScopes: ['global', 'wallpaper'] };
     if (!isManifest(this.manifest)) throw new Error('Invalid Host manifest');
     this.messageListener = (event) => this.receive(event); win?.addEventListener('message', this.messageListener);
   }
-  hello(): HelloPayload { return { role: 'host', identity: { id: this.options.implementationId, name: this.options.implementationName, version: this.options.implementationVersion }, protocolVersions: [PROTOCOL.version], capabilities: this.options.capabilities, requestedPermissions: this.options.permissions }; }
+  hello(): HelloPayload { return { role: 'host', identity: { id: this.options.implementationId, name: this.options.implementationName, version: this.options.implementationVersion }, protocolVersions: [PROTOCOL.version], capabilities: this.options.capabilities, requestedPermissions: this.options.permissions, ...(this.options.extensions.length ? { extensions: this.options.extensions } : {}) }; }
+  acceptsSelectedExtensions(selected: SelectedExtension[]): boolean {
+    const ids = new Set<string>();
+    return selected.every(extension => {
+      if (!extension || typeof extension.id !== 'string' || typeof extension.version !== 'string' || ids.has(extension.id)) return false;
+      ids.add(extension.id);
+      return this.options.extensions.some(offer => offer.id === extension.id && offer.versions.includes(extension.version));
+    });
+  }
   on(name: string, listener: Listener): () => void { const set = this.listeners.get(name) ?? new Set<Listener>(); set.add(listener); this.listeners.set(name, set); return () => set.delete(listener); }
   emit(name: string, value: unknown): void { for (const listener of this.listeners.get(name) ?? []) listener(value); }
-  mount(options: ComponentOptions): ComponentHandle { if (this.components.has(options.id)) throw new Error(`Component already mounted: ${options.id}`); const handle = new ComponentHandle(this, options.id, options); this.components.set(options.id, handle); handle.on('stopped', () => this.components.delete(options.id)); return handle; }
-  get(id: string): ComponentHandle | undefined { return this.components.get(id); }
-  unmount(id: string): void { this.components.get(id)?.dispose(); }
+  mount(options: ComponentOptions): ComponentHandle { const instanceId = options.instanceId ?? options.id ?? ''; if (this.components.has(instanceId)) throw new Error(`Component instance already mounted: ${instanceId}`); const handle = new ComponentHandle(this, options); this.components.set(instanceId, handle); handle.on('stopped', () => this.components.delete(instanceId)); return handle; }
+  get(instanceId: string): ComponentHandle | undefined { return this.components.get(instanceId); }
+  unmount(instanceId: string): void { this.components.get(instanceId)?.dispose(); }
   pauseAll(): void { for (const component of this.components.values()) component.pause(); }
   resumeAll(): void { for (const component of this.components.values()) component.resume(); }
   resizeAll(size: Size): void { for (const component of this.components.values()) component.setSize(size); }
