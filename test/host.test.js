@@ -76,6 +76,7 @@ test('distinguishes repeated component packages by stable instance ID and negoti
   a.iframe.load();
   const hello = a.iframe.contentWindow.messages[0].message;
   assert.deepEqual(hello.payload.extensions, [extension]);
+  assert.equal(hello.payload.instanceId, 'clock-a');
   const acknowledgement = response(hello.id, { selectedProtocol: hello.protocol, role: 'component', capabilities: [], permissions: [], selectedExtensions: [extension] });
   acknowledgement.result.selectedExtensions = [{ id: 'org.bap.unoffered', version: '0.1.0' }];
   window.dispatch({ type: 'message', origin: 'null', source: a.iframe.contentWindow, data: acknowledgement });

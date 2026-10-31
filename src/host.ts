@@ -88,7 +88,7 @@ export class ComponentHandle {
     if (message.kind === 'event' && message.event === 'component.fault') this.fail(bapError('INTERNAL_ERROR', 'Component reported a fault', message.payload as Record<string, unknown> | undefined));
     if (message.event) this.emit(message.event, message.payload);
   }
-  private beginHandshake(): void { if (this.state !== 'created') return; this.state = 'connected'; const hello = request('hello', this.host.hello()); this.helloRequestId = hello.id; this.send(hello); }
+  private beginHandshake(): void { if (this.state !== 'created') return; this.state = 'connected'; const hello = request('hello', this.host.hello(this.instanceId)); this.helloRequestId = hello.id; this.send(hello); }
   private handleHelloResponse(message: Message): void {
     if (message.ok !== true || !message.result) return this.fail(message.error ?? bapError('INVALID_MESSAGE', 'Invalid helloAck response'));
     const result = message.result as unknown as HelloAckResult;
@@ -175,7 +175,7 @@ export class HostRuntime {
     if (!isManifest(this.manifest)) throw new Error('Invalid Host manifest');
     this.messageListener = (event) => this.receive(event); win?.addEventListener('message', this.messageListener);
   }
-  hello(): HelloPayload { return { role: 'host', identity: { id: this.options.implementationId, name: this.options.implementationName, version: this.options.implementationVersion }, protocolVersions: [PROTOCOL.version], capabilities: this.options.capabilities, requestedPermissions: this.options.permissions, ...(this.options.extensions.length ? { extensions: this.options.extensions } : {}) }; }
+  hello(instanceId?: string): HelloPayload { const composition = this.options.extensions.some(extension => extension.id === 'org.bap.composition'); return { role: 'host', identity: { id: this.options.implementationId, name: this.options.implementationName, version: this.options.implementationVersion }, protocolVersions: [PROTOCOL.version], capabilities: this.options.capabilities, requestedPermissions: this.options.permissions, ...(this.options.extensions.length ? { extensions: this.options.extensions } : {}), ...(composition && instanceId ? { instanceId } : {}) }; }
   acceptsSelectedExtensions(selected: SelectedExtension[]): boolean {
     const ids = new Set<string>();
     return selected.every(extension => {
