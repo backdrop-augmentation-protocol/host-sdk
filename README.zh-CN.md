@@ -14,6 +14,7 @@ SDK 提供：
 - 单组件故障隔离；
 - 分离 `instanceId` 与 `componentId`，允许同一组件创建多个实例；
 - 可选的精确版本扩展协商；
+- 使用稳定外层容器实现归一化手动/网格布局，并将呈现可见性与 Core 生命周期分离；
 - Wallpaper Engine 适配边界。
 
 在 Wallpaper Engine 中，可将从 Companion 获取的自包含嵌入文档挂载到当前

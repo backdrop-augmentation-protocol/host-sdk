@@ -14,6 +14,7 @@ The SDK provides:
 - per-component fault isolation;
 - distinct `instanceId` and `componentId` identities, including repeated instances of one component;
 - optional exact-version extension negotiation;
+- stable outer containers for normalized manual/grid layout and presentation visibility separate from Core lifecycle;
 - a small adapter boundary for Wallpaper Engine.
 
 For Wallpaper Engine, mount a self-contained embedded document received from

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { HostRuntime, isManifest } from '../dist/index.js';
 
 class FakeWindow { listeners = new Map(); addEventListener(name, fn) { this.listeners.set(name, fn); } dispatch(event) { this.listeners.get(event.type)?.(event); } }
-class FakeIframe { style = {}; attributes = new Map(); contentWindow = { messages: [], postMessage: (message, origin) => this.contentWindow.messages.push({ message, origin }) }; listeners = new Map(); setAttribute(name, value) { this.attributes.set(name, value); } addEventListener(name, fn) { this.listeners.set(name, fn); } remove() { this.removed = true; } load() { this.listeners.get('load')?.(); } }
+class FakeIframe { style = {}; attributes = new Map(); children = []; contentWindow = { messages: [], postMessage: (message, origin) => this.contentWindow.messages.push({ message, origin }) }; listeners = new Map(); setAttribute(name, value) { this.attributes.set(name, value); } addEventListener(name, fn) { this.listeners.set(name, fn); } appendChild(child) { this.children.push(child); } remove() { this.removed = true; for (const child of this.children) child.remove?.(); } load() { this.listeners.get('load')?.(); } }
 class FakeDocument { baseURI = 'https://wallpaper.test/'; createElement() { return new FakeIframe(); } }
 class Container { children = []; appendChild(child) { this.children.push(child); } }
 const response = (correlationId, result, sessionId = 'session-1') => ({ protocol: { name: 'bap', version: '0.1.0', profile: 'core' }, kind: 'response', id: `response-${correlationId}`, correlationId, timestamp: new Date().toISOString(), sessionId, ok: true, result });
@@ -177,5 +177,83 @@ test('rejects ambiguous or non-isolated inline component sources', () => {
   assert.throws(() => host.mount({ id: 'clock', src: 'clock.html', srcdoc: '<p>clock</p>', container }), /Exactly one/);
   assert.throws(() => host.mount({ id: 'clock', srcdoc: '', container }), /non-empty/);
   assert.throws(() => host.mount({ id: 'clock', srcdoc: '<p>clock</p>', allowedOrigin: '*', container }), /opaque origin/);
+  host.destroy();
+});
+
+test('applies manual layout to a stable wrapper without re-creating the iframe on viewport changes', () => {
+  const host = new HostRuntime({ window: new FakeWindow(), document: new FakeDocument(), viewport: { width: 1000, height: 500 } });
+  const container = new Container();
+  const layout = { mode: 'manual', anchor: 'top-left', x: 0.12, y: 0.08, width: 0.2, height: 0.12, scale: 1.2, rotation: 15, opacity: 0.8, zIndex: 10, locked: false };
+  const component = host.mount({ instanceId: 'clock', componentId: 'org.example.clock', srcdoc: '<p>clock</p>', container, layout });
+  const iframe = component.iframe;
+  assert.equal(container.children.length, 1);
+  assert.equal(component.wrapper.style.left, '120px');
+  assert.equal(component.wrapper.style.top, '40px');
+  assert.equal(component.wrapper.style.width, '200px');
+  assert.equal(component.wrapper.style.height, '60px');
+  assert.equal(component.wrapper.style.transformOrigin, '0% 0%');
+  host.setViewport({ width: 2000, height: 1000 });
+  assert.equal(component.iframe, iframe);
+  assert.equal(component.wrapper.style.width, '400px');
+  assert.equal(component.wrapper.style.height, '120px');
+  assert.equal(container.children.length, 1);
+  host.destroy();
+});
+
+test('resolves automatic grid cells deterministically and honors locked manual instances', () => {
+  const host = new HostRuntime({ window: new FakeWindow(), document: new FakeDocument(), viewport: { width: 1000, height: 500 } });
+  host.setLayoutMode('grid', { columns: 2, gapX: 0.1, gapY: 0.05, paddingX: 0.1, paddingY: 0.1 });
+  const container = new Container();
+  const automatic = order => ({ mode: 'automatic', order, scale: 1, rotation: 0, opacity: 1, zIndex: order, locked: false });
+  const a = host.mount({ instanceId: 'b', componentId: 'org.example.clock', srcdoc: '<p>b</p>', container, layout: automatic(1) });
+  const b = host.mount({ instanceId: 'a', componentId: 'org.example.clock', srcdoc: '<p>a</p>', container, layout: automatic(0) });
+  const pinned = host.mount({ instanceId: 'pinned', componentId: 'org.example.calendar', srcdoc: '<p>pinned</p>', container, layout: { mode: 'manual', anchor: 'center', x: 0.5, y: 0.5, width: 0.2, height: 0.2, scale: 1, rotation: 0, opacity: 1, zIndex: 5, locked: true } });
+  assert.equal(b.wrapper.style.left, '100px');
+  assert.equal(b.wrapper.style.width, '350px');
+  assert.equal(a.wrapper.style.left, '550px');
+  assert.equal(a.wrapper.style.width, '350px');
+  assert.equal(pinned.wrapper.style.left, '500px');
+  assert.equal(pinned.wrapper.style.transformOrigin, '50% 50%');
+  host.destroy();
+});
+
+test('keeps presentation visibility separate from lifecycle and disables hit testing while hidden', () => {
+  const window = new FakeWindow();
+  const host = new HostRuntime({ window, document: new FakeDocument(), targetOrigin: 'https://component.test' });
+  const component = host.mount({ instanceId: 'clock', componentId: 'org.example.clock', src: 'https://component.test/clock.html', allowedOrigin: 'https://component.test', container: new Container(), presentation: { userVisible: false } });
+  component.iframe.load();
+  const hello = component.iframe.contentWindow.messages.at(-1).message;
+  window.dispatch({ type: 'message', origin: 'https://component.test', source: component.iframe.contentWindow, data: response(hello.id, { selectedProtocol: hello.protocol, role: 'component', capabilities: [], permissions: [] }, 's') });
+  let initialize = component.iframe.contentWindow.messages.at(-1).message;
+  window.dispatch({ type: 'message', origin: 'https://component.test', source: component.iframe.contentWindow, data: response(initialize.id, {}, 's') });
+  let start = component.iframe.contentWindow.messages.at(-1).message;
+  window.dispatch({ type: 'message', origin: 'https://component.test', source: component.iframe.contentWindow, data: response(start.id, {}, 's') });
+  assert.equal(component.state, 'running');
+  assert.equal(component.wrapper.style.visibility, 'hidden');
+  assert.equal(component.wrapper.style.pointerEvents, 'none');
+  component.setPresentation({ userVisible: true });
+  assert.equal(component.wrapper.style.visibility, 'visible');
+  component.setPresentation({ sceneAllowed: false });
+  assert.equal(component.state, 'running');
+  assert.equal(component.wrapper.style.visibility, 'hidden');
+  host.destroy();
+});
+
+test('accepts an exactly offered presentation extension and reports initial effective visibility', () => {
+  const window = new FakeWindow();
+  const host = new HostRuntime({ window, document: new FakeDocument(), targetOrigin: 'https://component.test', extensions: [{ id: 'org.bap.presentation', versions: ['0.1.0'] }] });
+  const component = host.mount({ instanceId: 'clock', componentId: 'org.example.clock', src: 'https://component.test/clock.html', allowedOrigin: 'https://component.test', container: new Container(), presentation: { userVisible: false } });
+  component.iframe.load();
+  const hello = component.iframe.contentWindow.messages.at(-1).message;
+  const ack = response(hello.id, { selectedProtocol: hello.protocol, role: 'component', capabilities: [], permissions: [], selectedExtensions: [{ id: 'org.bap.presentation', version: '0.1.0' }] }, 's');
+  window.dispatch({ type: 'message', origin: 'https://component.test', source: component.iframe.contentWindow, data: ack });
+  let lifecycle = component.iframe.contentWindow.messages.at(-1).message;
+  window.dispatch({ type: 'message', origin: 'https://component.test', source: component.iframe.contentWindow, data: response(lifecycle.id, {}, 's') });
+  lifecycle = component.iframe.contentWindow.messages.at(-1).message;
+  window.dispatch({ type: 'message', origin: 'https://component.test', source: component.iframe.contentWindow, data: response(lifecycle.id, {}, 's') });
+  assert.equal(component.state, 'running');
+  const visibility = component.iframe.contentWindow.messages.map(entry => entry.message).find(message => message.event === 'presentation.visibility.changed');
+  assert.equal(visibility.payload.instanceId, 'clock');
+  assert.equal(visibility.payload.visible, false);
   host.destroy();
 });
