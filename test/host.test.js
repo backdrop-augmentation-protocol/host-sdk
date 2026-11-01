@@ -219,10 +219,12 @@ test('applies manual layout to a stable wrapper without re-creating the iframe o
   assert.equal(component.wrapper.style.width, '200px');
   assert.equal(component.wrapper.style.height, '60px');
   assert.equal(component.wrapper.style.transformOrigin, '0% 0%');
+  assert.equal(component.wrapper.style.transition, 'none');
   host.setViewport({ width: 2000, height: 1000 });
   assert.equal(component.iframe, iframe);
   assert.equal(component.wrapper.style.width, '400px');
   assert.equal(component.wrapper.style.height, '120px');
+  assert.match(component.wrapper.style.transition, /left 140ms ease-out/);
   assert.equal(container.children.length, 1);
   host.destroy();
 });

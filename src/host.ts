@@ -132,8 +132,10 @@ export class ComponentHandle {
     const width = layout.width * viewport.width;
     const height = layout.height * viewport.height;
     const px = (value: number) => `${Number(value.toFixed(3))}px`;
+    const hasPreviousLayout = this.renderedLayout;
     this.renderedLayout = true;
     Object.assign(this.wrapper.style, {
+      transition: hasPreviousLayout ? 'left 140ms ease-out, top 140ms ease-out, width 140ms ease-out, height 140ms ease-out, transform 140ms ease-out, opacity 140ms ease-out' : 'none',
       display: 'block', position: 'absolute', left: px(layout.x * viewport.width), top: px(layout.y * viewport.height),
       width: px(width), height: px(height), transformOrigin: `${anchorX * 100}% ${anchorY * 100}%`,
       transform: `translate(${-anchorX * 100}%, ${-anchorY * 100}%) rotate(${layout.rotation}deg) scale(${layout.scale})`,
@@ -149,7 +151,7 @@ export class ComponentHandle {
   clearResolvedLayout(): void {
     if (!this.renderedLayout) return;
     this.renderedLayout = false;
-    Object.assign(this.wrapper.style, { display: this.state === 'failed' || this.state === 'stopped' ? 'none' : 'contents', position: '', left: '', top: '', width: '', height: '', transform: '', transformOrigin: '', opacity: '', zIndex: '' });
+    Object.assign(this.wrapper.style, { display: this.state === 'failed' || this.state === 'stopped' ? 'none' : 'contents', position: '', left: '', top: '', width: '', height: '', transform: '', transformOrigin: '', opacity: '', zIndex: '', transition: '' });
     this.iframe.style.width = this.requestedSize ? `${this.requestedSize.width}px` : '';
     this.iframe.style.height = this.requestedSize ? `${this.requestedSize.height}px` : '';
     this.lastRenderedSize = undefined;
