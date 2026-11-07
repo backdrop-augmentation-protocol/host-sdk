@@ -246,6 +246,41 @@ test('resolves automatic grid cells deterministically and honors locked manual i
   host.destroy();
 });
 
+test('applies layout mode and all instance layouts without recreating healthy iframes', () => {
+  const host = new HostRuntime({ window: new FakeWindow(), document: new FakeDocument(), viewport: { width: 1000, height: 500 } });
+  const container = new Container();
+  const manual = { mode: 'manual', anchor: 'top-left', x: 0.1, y: 0.1, width: 0.2, height: 0.2, scale: 1, rotation: 0, opacity: 1, zIndex: 0, locked: false };
+  const first = host.mount({ instanceId: 'first', componentId: 'org.example.clock', srcdoc: '<p>1</p>', container, layout: manual });
+  const second = host.mount({ instanceId: 'second', componentId: 'org.example.calendar', srcdoc: '<p>2</p>', container, layout: { ...manual, x: 0.4 } });
+  const firstIframe = first.iframe;
+  const secondIframe = second.iframe;
+  const automatic = order => ({ mode: 'automatic', order, scale: 1, rotation: 0, opacity: 1, zIndex: order, locked: false });
+  host.applyLayoutSnapshot('grid', { columns: 2, gapX: 0.04, gapY: 0.04, paddingX: 0.04, paddingY: 0.04 }, new Map([
+    ['first', automatic(0)], ['second', automatic(1)],
+  ]));
+  assert.equal(first.iframe, firstIframe);
+  assert.equal(second.iframe, secondIframe);
+  assert.equal(first.layoutRecord.mode, 'automatic');
+  assert.equal(second.layoutRecord.mode, 'automatic');
+  assert.notEqual(first.wrapper.style.left, second.wrapper.style.left);
+  assert.equal(container.children.length, 2);
+  host.destroy();
+});
+
+test('rejects an invalid layout snapshot without partially changing runtime state', () => {
+  const host = new HostRuntime({ window: new FakeWindow(), document: new FakeDocument(), viewport: { width: 1000, height: 500 } });
+  const container = new Container();
+  const manual = { mode: 'manual', anchor: 'top-left', x: 0.1, y: 0.1, width: 0.2, height: 0.2, scale: 1, rotation: 0, opacity: 1, zIndex: 0, locked: false };
+  const first = host.mount({ instanceId: 'first', componentId: 'org.example.clock', srcdoc: '<p>1</p>', container, layout: manual });
+  const originalLeft = first.wrapper.style.left;
+  assert.throws(() => host.applyLayoutSnapshot('grid', { columns: 2, gapX: 0.04, gapY: 0.04, paddingX: 0.04, paddingY: 0.04 }, new Map([
+    ['first', { mode: 'automatic', order: -1, scale: 1, rotation: 0, opacity: 1, zIndex: 0, locked: false }],
+  ])), /Invalid automatic component layout order/);
+  assert.equal(first.layoutRecord.mode, 'manual');
+  assert.equal(first.wrapper.style.left, originalLeft);
+  host.destroy();
+});
+
 test('keeps presentation visibility separate from lifecycle and disables hit testing while hidden', () => {
   const window = new FakeWindow();
   const host = new HostRuntime({ window, document: new FakeDocument(), targetOrigin: 'https://component.test' });

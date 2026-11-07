@@ -83,7 +83,7 @@ export class ComponentHandle {
     return true;
   }
   get layoutRecord(): ComponentLayout | undefined { return this.layout; }
-  setLayoutRecord(layout: ComponentLayout): void { this.layout = layout; }
+  setLayoutRecord(layout: ComponentLayout | undefined): void { this.layout = layout; }
   pause(): void { if (this.state === 'running') this.sendLifecycle('pause'); }
   resume(): void { if (this.state === 'paused') this.sendLifecycle('resume'); }
   stop(): void { if (this.state === 'stopped') return; if (['initialized', 'running', 'paused'].includes(this.state)) this.sendLifecycle('stop'); else this.finishStop(); }
@@ -202,6 +202,20 @@ export class HostRuntime {
   }
   setViewport(viewport: Viewport): void { resolveLayouts(this.currentLayouts(), this.layoutMode, this.gridSettings, viewport); this.viewport = viewport; this.renderLayouts(); }
   setLayoutMode(mode: LayoutMode, grid?: GridSettings): void { const selectedGrid = mode === 'grid' ? grid : undefined; resolveLayouts(this.currentLayouts(), mode, selectedGrid, this.viewport); this.layoutMode = mode; this.gridSettings = selectedGrid; this.renderLayouts(); }
+  applyLayoutSnapshot(mode: LayoutMode, grid: GridSettings | undefined, layouts: ReadonlyMap<string, ComponentLayout | undefined>): void {
+    const selectedGrid = mode === 'grid' ? grid : undefined;
+    const candidate = new Map<string, ComponentLayout>();
+    for (const [instanceId, component] of this.components) {
+      const layout = layouts.get(instanceId);
+      if (layout !== undefined) candidate.set(instanceId, layout);
+      else if (!layouts.has(instanceId) && component.layoutRecord) candidate.set(instanceId, component.layoutRecord);
+    }
+    resolveLayouts(candidate, mode, selectedGrid, this.viewport);
+    for (const [instanceId, component] of this.components) component.setLayoutRecord(candidate.get(instanceId));
+    this.layoutMode = mode;
+    this.gridSettings = selectedGrid;
+    this.renderLayouts();
+  }
   setLayout(instanceId: string, layout: ComponentLayout): void {
     const component = this.components.get(instanceId);
     if (!component) throw new Error(`Unknown component instance: ${instanceId}`);
