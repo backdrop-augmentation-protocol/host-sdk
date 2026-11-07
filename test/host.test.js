@@ -306,9 +306,11 @@ test('keeps presentation visibility separate from lifecycle and disables hit tes
 test('accepts an exactly offered presentation extension and reports initial effective visibility', () => {
   const window = new FakeWindow();
   const host = new HostRuntime({ window, document: new FakeDocument(), targetOrigin: 'https://component.test', extensions: [{ id: 'org.bap.presentation', versions: ['0.1.0'] }] });
+  assert.equal(host.setScene('lock-screen', 'startup'), 0);
   const component = host.mount({ instanceId: 'clock', componentId: 'org.example.clock', src: 'https://component.test/clock.html', allowedOrigin: 'https://component.test', container: new Container(), presentation: { userVisible: false } });
   component.iframe.load();
   const hello = component.iframe.contentWindow.messages.at(-1).message;
+  assert.equal(hello.payload.instanceId, 'clock');
   const ack = response(hello.id, { selectedProtocol: hello.protocol, role: 'component', capabilities: [], permissions: [], selectedExtensions: [{ id: 'org.bap.presentation', version: '0.1.0' }] }, 's');
   window.dispatch({ type: 'message', origin: 'https://component.test', source: component.iframe.contentWindow, data: ack });
   let lifecycle = component.iframe.contentWindow.messages.at(-1).message;
@@ -319,5 +321,14 @@ test('accepts an exactly offered presentation extension and reports initial effe
   const visibility = component.iframe.contentWindow.messages.map(entry => entry.message).find(message => message.event === 'presentation.visibility.changed');
   assert.equal(visibility.payload.instanceId, 'clock');
   assert.equal(visibility.payload.visible, false);
+  let scenes = component.iframe.contentWindow.messages.map(entry => entry.message).filter(message => message.event === 'presentation.scene.changed');
+  assert.equal(scenes.length, 1);
+  assert.deepEqual(scenes[0].payload, { instanceId: 'clock', sceneId: 'lock-screen', revision: 0, reason: 'startup' });
+  assert.equal(host.setScene('lock-screen', 'duplicate'), 0);
+  assert.equal(host.setScene('desktop', 'resume'), 1);
+  scenes = component.iframe.contentWindow.messages.map(entry => entry.message).filter(message => message.event === 'presentation.scene.changed');
+  assert.equal(scenes.length, 2);
+  assert.deepEqual(scenes[1].payload, { instanceId: 'clock', sceneId: 'desktop', revision: 1, reason: 'resume' });
+  assert.throws(() => host.setScene('', 'invalid'), /sceneId/);
   host.destroy();
 });
