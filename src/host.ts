@@ -5,7 +5,6 @@ export type ComponentState = 'created' | 'connected' | 'initialized' | 'running'
 export interface Size { width: number; height: number; devicePixelRatio?: number }
 export interface HostOptions { implementationId?: string; implementationName?: string; implementationVersion?: string; capabilities?: string[]; permissions?: string[]; extensions?: ExtensionOffer[]; handshakeTimeoutMs?: number; targetOrigin?: string; viewport?: Viewport; window?: Window; document?: Document; }
 export interface PresentationState { enabled: boolean; userVisible: boolean; sceneAllowed: boolean; }
-export interface SceneState { sceneId: string; revision: number; reason?: string; }
 export interface ComponentOptions { instanceId?: string; componentId?: string; sourceKey?: string; /** @deprecated Use instanceId and componentId separately. */ id?: string; src?: string; srcdoc?: string; container: HTMLElement; size?: Size; allowedOrigin?: string; layout?: ComponentLayout; presentation?: Partial<PresentationState>; config?: Record<string, unknown>; configRevision?: number; }
 type Listener = (value: unknown) => void;
 const bapError = (code: BapError['code'], message: string, details?: Record<string, unknown>): BapError => ({ code, message, ...(details ? { details } : {}) });
@@ -33,7 +32,6 @@ export class ComponentHandle {
   private renderedLayout = false;
   private presentationConfigured = false;
   private presentation: PresentationState = { enabled: true, userVisible: true, sceneAllowed: true };
-  private sceneState?: SceneState;
   private lastRenderedSize?: Size;
   private lastEffectiveVisibility?: boolean;
   private requestedSize?: Size;
@@ -76,7 +74,6 @@ export class ComponentHandle {
   setSize(size: Size): void { this.requestedSize = size; this.iframe.style.width = this.renderedLayout ? '100%' : `${size.width}px`; this.iframe.style.height = this.renderedLayout ? '100%' : `${size.height}px`; if (['initialized', 'running', 'paused'].includes(this.state)) this.sendEvent('host.size.changed', size); }
   setLayout(layout: ComponentLayout): void { this.host.setLayout(this.instanceId, layout); }
   setPresentation(patch: Partial<PresentationState>): void { this.presentationConfigured = true; this.presentation = { ...this.presentation, ...patch }; this.updatePresentation(); }
-  setScene(state: SceneState): void { this.sceneState = { ...state }; this.sendScene(); }
   setConfig(config: Record<string, unknown>, revision: number): boolean {
     if (!isRecord(config) || !Number.isSafeInteger(revision) || revision <= this.configRevision ||
       !this.selectedExtensions.some(extension => extension.id === 'org.bap.component-config')) return false;
@@ -120,14 +117,13 @@ export class ComponentHandle {
     if (!method) return;
     this.pendingRequests.delete(message.correlationId!);
     if (method === 'initialize' && this.state === 'connected') { this.state = 'initialized'; this.sendLifecycle('start'); return; }
-    if (method === 'start' && this.state === 'initialized') { this.state = 'running'; this.updatePresentation(); this.sendConfig(); this.sendScene(); this.emit('ready', { capabilities: this.capabilities }); return; }
+    if (method === 'start' && this.state === 'initialized') { this.state = 'running'; this.updatePresentation(); this.sendConfig(); this.emit('ready', { capabilities: this.capabilities }); return; }
     if (method === 'pause' && this.state === 'running') { this.state = 'paused'; this.emit('paused', undefined); return; }
     if (method === 'resume' && this.state === 'paused') { this.state = 'running'; this.emit('resumed', undefined); return; }
     if (method === 'stop') this.finishStop();
   }
   private sendLifecycle(method: 'initialize' | 'start' | 'pause' | 'resume' | 'stop'): void { const message = request(method, {}, this.sessionId); this.pendingRequests.set(message.id, method); this.send(message); }
   private sendConfig(): void { if (this.selectedExtensions.some(extension => extension.id === 'org.bap.component-config')) this.sendEvent('component.config.changed', { instanceId: this.instanceId, revision: this.configRevision, config: this.config }); }
-  private sendScene(): void { if (this.sceneState && this.selectedExtensions.some(extension => extension.id === 'org.bap.presentation')) this.sendEvent('presentation.scene.changed', { instanceId: this.instanceId, ...this.sceneState }); }
   private sendEvent(name: string, payload: object): void { this.send(event(name, payload, this.sessionId)); }
   private send(message: Message): void { this.iframe.contentWindow?.postMessage(message, this.inlineSource ? '*' : this.host.targetOrigin); }
   applyResolvedLayout(layout: ResolvedLayout, viewport: Viewport): void {
@@ -185,9 +181,6 @@ export class HostRuntime {
   private viewport: Viewport;
   private layoutMode: LayoutMode = 'manual';
   private gridSettings?: GridSettings;
-  private sceneId?: string;
-  private sceneRevision = -1;
-  private sceneReason?: string;
   private readonly components = new Map<string, ComponentHandle>(); private readonly listeners = new Map<string, Set<Listener>>(); private readonly messageListener: (event: MessageEvent) => void;
   constructor(options: HostOptions = {}) {
     const win = options.window ?? globalThis.window; this.document = options.document ?? win?.document; if (!this.document) throw new Error('HostRuntime requires a browser document');
@@ -198,7 +191,7 @@ export class HostRuntime {
     if (!isManifest(this.manifest)) throw new Error('Invalid Host manifest');
     this.messageListener = (event) => this.receive(event); win?.addEventListener('message', this.messageListener);
   }
-  hello(instanceId?: string): HelloPayload { const needsInstanceId = this.options.extensions.some(extension => ['org.bap.composition', 'org.bap.component-config', 'org.bap.presentation'].includes(extension.id)); return { role: 'host', identity: { id: this.options.implementationId, name: this.options.implementationName, version: this.options.implementationVersion }, protocolVersions: [PROTOCOL.version], capabilities: this.options.capabilities, requestedPermissions: this.options.permissions, ...(this.options.extensions.length ? { extensions: this.options.extensions } : {}), ...(needsInstanceId && instanceId ? { instanceId } : {}) }; }
+  hello(instanceId?: string): HelloPayload { const needsInstanceId = this.options.extensions.some(extension => extension.id === 'org.bap.composition' || extension.id === 'org.bap.component-config'); return { role: 'host', identity: { id: this.options.implementationId, name: this.options.implementationName, version: this.options.implementationVersion }, protocolVersions: [PROTOCOL.version], capabilities: this.options.capabilities, requestedPermissions: this.options.permissions, ...(this.options.extensions.length ? { extensions: this.options.extensions } : {}), ...(needsInstanceId && instanceId ? { instanceId } : {}) }; }
   acceptsSelectedExtensions(selected: SelectedExtension[]): boolean {
     const ids = new Set<string>();
     return selected.every(extension => {
@@ -208,16 +201,6 @@ export class HostRuntime {
     });
   }
   setViewport(viewport: Viewport): void { resolveLayouts(this.currentLayouts(), this.layoutMode, this.gridSettings, viewport); this.viewport = viewport; this.renderLayouts(); }
-  setScene(sceneId: string, reason?: string): number {
-    if (typeof sceneId !== 'string' || !sceneId.trim() || sceneId.length > 128) throw new TypeError('sceneId must be a non-empty string of at most 128 characters');
-    if (reason !== undefined && (typeof reason !== 'string' || reason.length > 256)) throw new TypeError('scene reason must be a string of at most 256 characters');
-    if (sceneId === this.sceneId) return this.sceneRevision;
-    this.sceneId = sceneId;
-    this.sceneRevision++;
-    this.sceneReason = reason;
-    for (const component of this.components.values()) component.setScene({ sceneId, revision: this.sceneRevision, ...(reason === undefined ? {} : { reason }) });
-    return this.sceneRevision;
-  }
   setLayoutMode(mode: LayoutMode, grid?: GridSettings): void { const selectedGrid = mode === 'grid' ? grid : undefined; resolveLayouts(this.currentLayouts(), mode, selectedGrid, this.viewport); this.layoutMode = mode; this.gridSettings = selectedGrid; this.renderLayouts(); }
   applyLayoutSnapshot(mode: LayoutMode, grid: GridSettings | undefined, layouts: ReadonlyMap<string, ComponentLayout | undefined>): void {
     const selectedGrid = mode === 'grid' ? grid : undefined;
@@ -245,7 +228,7 @@ export class HostRuntime {
   }
   on(name: string, listener: Listener): () => void { const set = this.listeners.get(name) ?? new Set<Listener>(); set.add(listener); this.listeners.set(name, set); return () => set.delete(listener); }
   emit(name: string, value: unknown): void { for (const listener of this.listeners.get(name) ?? []) listener(value); }
-  mount(options: ComponentOptions): ComponentHandle { const instanceId = options.instanceId ?? options.id ?? ''; if (this.components.has(instanceId)) throw new Error(`Component instance already mounted: ${instanceId}`); const candidate = this.currentLayouts(); if (options.layout) { validateComponentLayout(options.layout); candidate.set(instanceId, options.layout); resolveLayouts(candidate, this.layoutMode, this.gridSettings, this.viewport); } const handle = new ComponentHandle(this, options); if (this.sceneId !== undefined) handle.setScene({ sceneId: this.sceneId, revision: this.sceneRevision, ...(this.sceneReason === undefined ? {} : { reason: this.sceneReason }) }); this.components.set(instanceId, handle); handle.on('stopped', () => this.components.delete(instanceId)); this.renderLayouts(); return handle; }
+  mount(options: ComponentOptions): ComponentHandle { const instanceId = options.instanceId ?? options.id ?? ''; if (this.components.has(instanceId)) throw new Error(`Component instance already mounted: ${instanceId}`); const candidate = this.currentLayouts(); if (options.layout) { validateComponentLayout(options.layout); candidate.set(instanceId, options.layout); resolveLayouts(candidate, this.layoutMode, this.gridSettings, this.viewport); } const handle = new ComponentHandle(this, options); this.components.set(instanceId, handle); handle.on('stopped', () => this.components.delete(instanceId)); this.renderLayouts(); return handle; }
   get(instanceId: string): ComponentHandle | undefined { return this.components.get(instanceId); }
   updateConfig(instanceId: string, config: Record<string, unknown>, revision: number): boolean {
     const component = this.components.get(instanceId);
