@@ -297,7 +297,7 @@ test('keeps presentation visibility separate from lifecycle and disables hit tes
   assert.equal(component.wrapper.style.pointerEvents, 'none');
   component.setPresentation({ userVisible: true });
   assert.equal(component.wrapper.style.visibility, 'visible');
-  component.setPresentation({ sceneAllowed: false });
+  component.setPresentation({ enabled: false });
   assert.equal(component.state, 'running');
   assert.equal(component.wrapper.style.visibility, 'hidden');
   host.destroy();

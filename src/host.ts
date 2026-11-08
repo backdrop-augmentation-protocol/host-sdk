@@ -4,7 +4,7 @@ import { ComponentLayout, GridSettings, LayoutMode, ResolvedLayout, Viewport, an
 export type ComponentState = 'created' | 'connected' | 'initialized' | 'running' | 'paused' | 'stopped' | 'failed';
 export interface Size { width: number; height: number; devicePixelRatio?: number }
 export interface HostOptions { implementationId?: string; implementationName?: string; implementationVersion?: string; capabilities?: string[]; permissions?: string[]; extensions?: ExtensionOffer[]; handshakeTimeoutMs?: number; targetOrigin?: string; viewport?: Viewport; window?: Window; document?: Document; }
-export interface PresentationState { enabled: boolean; userVisible: boolean; sceneAllowed: boolean; }
+export interface PresentationState { enabled: boolean; userVisible: boolean; }
 export interface ComponentOptions { instanceId?: string; componentId?: string; sourceKey?: string; /** @deprecated Use instanceId and componentId separately. */ id?: string; src?: string; srcdoc?: string; container: HTMLElement; size?: Size; allowedOrigin?: string; layout?: ComponentLayout; presentation?: Partial<PresentationState>; config?: Record<string, unknown>; configRevision?: number; }
 type Listener = (value: unknown) => void;
 const bapError = (code: BapError['code'], message: string, details?: Record<string, unknown>): BapError => ({ code, message, ...(details ? { details } : {}) });
@@ -31,7 +31,7 @@ export class ComponentHandle {
   private layout?: ComponentLayout;
   private renderedLayout = false;
   private presentationConfigured = false;
-  private presentation: PresentationState = { enabled: true, userVisible: true, sceneAllowed: true };
+  private presentation: PresentationState = { enabled: true, userVisible: true };
   private lastRenderedSize?: Size;
   private lastEffectiveVisibility?: boolean;
   private requestedSize?: Size;
@@ -160,7 +160,7 @@ export class ComponentHandle {
   private updatePresentation(): void {
     if (!this.presentationConfigured) return;
     const ready = this.state === 'running' || this.state === 'paused';
-    const visible = this.presentation.enabled && this.presentation.userVisible && this.presentation.sceneAllowed && ready;
+    const visible = this.presentation.enabled && this.presentation.userVisible && ready;
     this.wrapper.style.visibility = visible ? 'visible' : 'hidden';
     this.wrapper.style.pointerEvents = visible ? 'auto' : 'none';
     this.iframe.style.visibility = visible ? 'visible' : 'hidden';
