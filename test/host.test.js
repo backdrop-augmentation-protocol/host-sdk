@@ -85,6 +85,34 @@ test('distinguishes repeated component packages by stable instance ID and negoti
   host.destroy();
 });
 
+test('exposes a read-only inventory of every currently mounted component instance', () => {
+  const host = new HostRuntime({ window: new FakeWindow(), document: new FakeDocument() });
+  const first = host.mount({
+    instanceId: 'clock-left', componentId: 'org.example.clock', sourceKey: 'workshop:1',
+    srcdoc: '<p>Clock</p>', container: new Container(), config: { format: '24h' }, configRevision: 3,
+    layout: { mode: 'manual', anchor: 'top-left', x: 0.1, y: 0.2, width: 0.3, height: 0.4, scale: 1, rotation: 0, opacity: 1, zIndex: 0, locked: false },
+  });
+  host.mount({ instanceId: 'clock-right', componentId: 'org.example.clock', srcdoc: '<p>Clock</p>', container: new Container() });
+
+  assert.equal(host.componentCount, 2);
+  const instances = host.getComponentInstances();
+  assert.deepEqual(instances.map(instance => instance.instanceId), ['clock-left', 'clock-right']);
+  assert.deepEqual(instances[0], {
+    instanceId: 'clock-left', componentId: 'org.example.clock', sourceKey: 'workshop:1', state: 'created',
+    layout: { mode: 'manual', anchor: 'top-left', x: 0.1, y: 0.2, width: 0.3, height: 0.4, scale: 1, rotation: 0, opacity: 1, zIndex: 0, locked: false },
+    presentation: { enabled: true, userVisible: true }, config: { format: '24h' }, configRevision: 3,
+  });
+  instances[0].config.format = 'corrupted';
+  instances[0].layout.order = 99;
+  assert.deepEqual(first.instanceInfo.config, { format: '24h' });
+  assert.equal(first.layoutRecord.x, 0.1);
+
+  host.unmount('clock-left');
+  assert.equal(host.componentCount, 1);
+  assert.deepEqual(host.getComponentInstances().map(instance => instance.instanceId), ['clock-right']);
+  host.destroy();
+});
+
 test('delivers initial and updated configuration only to the negotiated component instance', () => {
   const window = new FakeWindow();
   const extension = { id: 'org.bap.component-config', versions: ['0.1.0'] };

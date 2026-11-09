@@ -5,6 +5,17 @@ export type ComponentState = 'created' | 'connected' | 'initialized' | 'running'
 export interface Size { width: number; height: number; devicePixelRatio?: number }
 export interface HostOptions { implementationId?: string; implementationName?: string; implementationVersion?: string; capabilities?: string[]; permissions?: string[]; extensions?: ExtensionOffer[]; handshakeTimeoutMs?: number; targetOrigin?: string; viewport?: Viewport; window?: Window; document?: Document; }
 export interface PresentationState { enabled: boolean; userVisible: boolean; }
+/** Read-only snapshot of one Component instance currently owned by a HostRuntime. */
+export interface ComponentInstanceInfo {
+  instanceId: string;
+  componentId: string;
+  sourceKey?: string;
+  state: ComponentState;
+  layout?: ComponentLayout;
+  presentation: PresentationState;
+  config: Record<string, unknown>;
+  configRevision: number;
+}
 export interface ComponentOptions { instanceId?: string; componentId?: string; sourceKey?: string; /** @deprecated Use instanceId and componentId separately. */ id?: string; src?: string; srcdoc?: string; container: HTMLElement; size?: Size; allowedOrigin?: string; layout?: ComponentLayout; presentation?: Partial<PresentationState>; config?: Record<string, unknown>; configRevision?: number; }
 type Listener = (value: unknown) => void;
 const bapError = (code: BapError['code'], message: string, details?: Record<string, unknown>): BapError => ({ code, message, ...(details ? { details } : {}) });
@@ -83,6 +94,18 @@ export class ComponentHandle {
     return true;
   }
   get layoutRecord(): ComponentLayout | undefined { return this.layout; }
+  get instanceInfo(): ComponentInstanceInfo {
+    return {
+      instanceId: this.instanceId,
+      componentId: this.componentId,
+      ...(this.sourceKey ? { sourceKey: this.sourceKey } : {}),
+      state: this.state,
+      ...(this.layout ? { layout: structuredClone(this.layout) } : {}),
+      presentation: { ...this.presentation },
+      config: structuredClone(this.config),
+      configRevision: this.configRevision,
+    };
+  }
   setLayoutRecord(layout: ComponentLayout | undefined): void { this.layout = layout; }
   pause(): void { if (this.state === 'running') this.sendLifecycle('pause'); }
   resume(): void { if (this.state === 'paused') this.sendLifecycle('resume'); }
@@ -230,6 +253,10 @@ export class HostRuntime {
   emit(name: string, value: unknown): void { for (const listener of this.listeners.get(name) ?? []) listener(value); }
   mount(options: ComponentOptions): ComponentHandle { const instanceId = options.instanceId ?? options.id ?? ''; if (this.components.has(instanceId)) throw new Error(`Component instance already mounted: ${instanceId}`); const candidate = this.currentLayouts(); if (options.layout) { validateComponentLayout(options.layout); candidate.set(instanceId, options.layout); resolveLayouts(candidate, this.layoutMode, this.gridSettings, this.viewport); } const handle = new ComponentHandle(this, options); this.components.set(instanceId, handle); handle.on('stopped', () => this.components.delete(instanceId)); this.renderLayouts(); return handle; }
   get(instanceId: string): ComponentHandle | undefined { return this.components.get(instanceId); }
+  /** Number of Component instances currently mounted in this Host. */
+  get componentCount(): number { return this.components.size; }
+  /** Returns isolated snapshots of all currently mounted Component instances, including loading and failed instances. */
+  getComponentInstances(): ComponentInstanceInfo[] { return [...this.components.values()].map(component => component.instanceInfo); }
   updateConfig(instanceId: string, config: Record<string, unknown>, revision: number): boolean {
     const component = this.components.get(instanceId);
     if (!component) return false;

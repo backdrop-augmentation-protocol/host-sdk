@@ -24,6 +24,15 @@ the Companion without creating another wallpaper project:
 host.mount({ instanceId: 'clock-primary', componentId: manifest.id, srcdoc: embeddedHtml, container });
 ```
 
+The Host can inspect its own live Component inventory without consulting preset state:
+
+```ts
+const instances = host.getComponentInstances();
+console.log(host.componentCount, instances);
+```
+
+The inventory includes every mounted instance (including loading, paused, and failed instances), with its stable instance/package IDs, runtime state, layout, presentation flags, effective config, and config revision. Each call returns detached snapshots; changing a snapshot does not mutate the running Host. `host.get(instanceId)` remains available when direct control of a particular `ComponentHandle` is needed.
+
 `srcdoc` frames use `sandbox="allow-scripts"` and an opaque origin. The SDK
 checks the frame window and accepts only that frame's `null` origin for BAP
 messages. A URL-backed `src` frame remains available for other environments.

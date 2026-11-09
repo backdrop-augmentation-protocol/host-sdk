@@ -24,6 +24,15 @@ SDK 提供：
 host.mount({ instanceId: 'clock-primary', componentId: manifest.id, srcdoc: embeddedHtml, container });
 ```
 
+Host 可以直接读取自身当前运行的 Component 实例清单，不依赖预设状态：
+
+```ts
+const instances = host.getComponentInstances();
+console.log(host.componentCount, instances);
+```
+
+清单包含所有已挂载实例（包括加载中、暂停和失败的实例），并提供稳定的实例/组件 ID、运行状态、布局、呈现标志、有效配置和配置修订号。每次调用都会返回与运行时隔离的快照；修改快照不会改变运行中的 Host。需要直接控制某个实例时，仍可使用 `host.get(instanceId)` 获取对应的 `ComponentHandle`。
+
 `srcdoc` iframe 使用 `sandbox="allow-scripts"` 和不透明 Origin。SDK 校验
 iframe 窗口，只接受该窗口以 `null` Origin 发送的 BAP 消息。其他环境仍可
 使用 URL 形式的 `src`。`src` 与 `srcdoc` 必须且只能提供一个。
