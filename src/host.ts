@@ -84,13 +84,14 @@ export class ComponentHandle {
   on(name: string, listener: Listener): () => void { const set = this.listeners.get(name) ?? new Set<Listener>(); set.add(listener); this.listeners.set(name, set); return () => set.delete(listener); }
   setSize(size: Size): void { this.requestedSize = size; this.iframe.style.width = this.renderedLayout ? '100%' : `${size.width}px`; this.iframe.style.height = this.renderedLayout ? '100%' : `${size.height}px`; if (['initialized', 'running', 'paused'].includes(this.state)) this.sendEvent('host.size.changed', size); }
   setLayout(layout: ComponentLayout): void { this.host.setLayout(this.instanceId, layout); }
-  setPresentation(patch: Partial<PresentationState>): void { this.presentationConfigured = true; this.presentation = { ...this.presentation, ...patch }; this.updatePresentation(); }
+  setPresentation(patch: Partial<PresentationState>): void { this.presentationConfigured = true; this.presentation = { ...this.presentation, ...patch }; this.updatePresentation(); this.host.emit('componentInventoryChanged', this.host.getComponentInstances()); }
   setConfig(config: Record<string, unknown>, revision: number): boolean {
     if (!isRecord(config) || !Number.isSafeInteger(revision) || revision <= this.configRevision ||
       !this.selectedExtensions.some(extension => extension.id === 'org.bap.component-config')) return false;
     this.config = structuredClone(config);
     this.configRevision = revision;
     if (this.state === 'running' || this.state === 'paused') this.sendConfig();
+    this.host.emit('componentInventoryChanged', this.host.getComponentInstances());
     return true;
   }
   get layoutRecord(): ComponentLayout | undefined { return this.layout; }
@@ -106,7 +107,7 @@ export class ComponentHandle {
       configRevision: this.configRevision,
     };
   }
-  setLayoutRecord(layout: ComponentLayout | undefined): void { this.layout = layout; }
+  setLayoutRecord(layout: ComponentLayout | undefined): void { this.layout = layout; this.host.emit('componentInventoryChanged', this.host.getComponentInstances()); }
   pause(): void { if (this.state === 'running') this.sendLifecycle('pause'); }
   resume(): void { if (this.state === 'paused') this.sendLifecycle('resume'); }
   stop(): void { if (this.state === 'stopped') return; if (['initialized', 'running', 'paused'].includes(this.state)) this.sendLifecycle('stop'); else this.finishStop(); }
@@ -139,10 +140,10 @@ export class ComponentHandle {
     const method = message.correlationId ? this.pendingRequests.get(message.correlationId) : undefined;
     if (!method) return;
     this.pendingRequests.delete(message.correlationId!);
-    if (method === 'initialize' && this.state === 'connected') { this.state = 'initialized'; this.sendLifecycle('start'); return; }
-    if (method === 'start' && this.state === 'initialized') { this.state = 'running'; this.updatePresentation(); this.sendConfig(); this.emit('ready', { capabilities: this.capabilities }); return; }
-    if (method === 'pause' && this.state === 'running') { this.state = 'paused'; this.emit('paused', undefined); return; }
-    if (method === 'resume' && this.state === 'paused') { this.state = 'running'; this.emit('resumed', undefined); return; }
+    if (method === 'initialize' && this.state === 'connected') { this.state = 'initialized'; this.host.emit('componentInventoryChanged', this.host.getComponentInstances()); this.sendLifecycle('start'); return; }
+    if (method === 'start' && this.state === 'initialized') { this.state = 'running'; this.updatePresentation(); this.host.emit('componentInventoryChanged', this.host.getComponentInstances()); this.sendConfig(); this.emit('ready', { capabilities: this.capabilities }); return; }
+    if (method === 'pause' && this.state === 'running') { this.state = 'paused'; this.host.emit('componentInventoryChanged', this.host.getComponentInstances()); this.emit('paused', undefined); return; }
+    if (method === 'resume' && this.state === 'paused') { this.state = 'running'; this.host.emit('componentInventoryChanged', this.host.getComponentInstances()); this.emit('resumed', undefined); return; }
     if (method === 'stop') this.finishStop();
   }
   private sendLifecycle(method: 'initialize' | 'start' | 'pause' | 'resume' | 'stop'): void { const message = request(method, {}, this.sessionId); this.pendingRequests.set(message.id, method); this.send(message); }
@@ -192,8 +193,8 @@ export class ComponentHandle {
       this.sendEvent('presentation.visibility.changed', { instanceId: this.instanceId, visible });
     this.lastEffectiveVisibility = visible;
   }
-  private finishStop(): void { if (this.state === 'stopped') return; clearTimeout(this.handshakeTimer); this.state = 'stopped'; this.wrapper.remove(); this.emit('stopped', undefined); }
-  private fail(fault: BapError): void { if (this.state === 'failed' || this.state === 'stopped') return; clearTimeout(this.handshakeTimer); this.state = 'failed'; this.wrapper.style.display = 'none'; this.emit('fault', fault); this.host.emit('componentFault', { id: this.instanceId, instanceId: this.instanceId, componentId: this.componentId, error: fault }); }
+  private finishStop(): void { if (this.state === 'stopped') return; clearTimeout(this.handshakeTimer); this.state = 'stopped'; this.wrapper.remove(); this.emit('stopped', undefined); this.host.emit('componentInventoryChanged', this.host.getComponentInstances()); }
+  private fail(fault: BapError): void { if (this.state === 'failed' || this.state === 'stopped') return; clearTimeout(this.handshakeTimer); this.state = 'failed'; this.wrapper.style.display = 'none'; this.host.emit('componentInventoryChanged', this.host.getComponentInstances()); this.emit('fault', fault); this.host.emit('componentFault', { id: this.instanceId, instanceId: this.instanceId, componentId: this.componentId, error: fault }); }
   private emit(name: string, value: unknown): void { for (const listener of this.listeners.get(name) ?? []) listener(value); }
 }
 
@@ -248,10 +249,11 @@ export class HostRuntime {
     resolveLayouts(candidate, this.layoutMode, this.gridSettings, this.viewport);
     component.setLayoutRecord(layout);
     this.renderLayouts();
+    this.emit('componentInventoryChanged', this.getComponentInstances());
   }
   on(name: string, listener: Listener): () => void { const set = this.listeners.get(name) ?? new Set<Listener>(); set.add(listener); this.listeners.set(name, set); return () => set.delete(listener); }
   emit(name: string, value: unknown): void { for (const listener of this.listeners.get(name) ?? []) listener(value); }
-  mount(options: ComponentOptions): ComponentHandle { const instanceId = options.instanceId ?? options.id ?? ''; if (this.components.has(instanceId)) throw new Error(`Component instance already mounted: ${instanceId}`); const candidate = this.currentLayouts(); if (options.layout) { validateComponentLayout(options.layout); candidate.set(instanceId, options.layout); resolveLayouts(candidate, this.layoutMode, this.gridSettings, this.viewport); } const handle = new ComponentHandle(this, options); this.components.set(instanceId, handle); handle.on('stopped', () => this.components.delete(instanceId)); this.renderLayouts(); return handle; }
+  mount(options: ComponentOptions): ComponentHandle { const instanceId = options.instanceId ?? options.id ?? ''; if (this.components.has(instanceId)) throw new Error(`Component instance already mounted: ${instanceId}`); const candidate = this.currentLayouts(); if (options.layout) { validateComponentLayout(options.layout); candidate.set(instanceId, options.layout); resolveLayouts(candidate, this.layoutMode, this.gridSettings, this.viewport); } const handle = new ComponentHandle(this, options); this.components.set(instanceId, handle); handle.on('stopped', () => this.components.delete(instanceId)); this.renderLayouts(); this.emit('componentInventoryChanged', this.getComponentInstances()); return handle; }
   get(instanceId: string): ComponentHandle | undefined { return this.components.get(instanceId); }
   /** Number of Component instances currently mounted in this Host. */
   get componentCount(): number { return this.components.size; }

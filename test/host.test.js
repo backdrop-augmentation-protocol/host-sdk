@@ -113,6 +113,32 @@ test('exposes a read-only inventory of every currently mounted component instanc
   host.destroy();
 });
 
+test('emits complete live inventory snapshots after mount, lifecycle changes, config and unmount', () => {
+  const window = new FakeWindow();
+  const host = new HostRuntime({ window, document: new FakeDocument(), targetOrigin: 'https://component.test', extensions: [{ id: 'org.bap.component-config', versions: ['0.1.0'] }] });
+  const reports = [];
+  host.on('componentInventoryChanged', snapshot => reports.push(snapshot));
+  const component = host.mount({ instanceId: 'clock', componentId: 'org.example.clock', src: 'https://component.test/clock', allowedOrigin: 'https://component.test', container: new Container(), config: { format: '24h' } });
+  assert.equal(reports.at(-1)[0].state, 'created');
+  component.iframe.load();
+  let message = component.iframe.contentWindow.messages.at(-1).message;
+  window.dispatch({ type: 'message', origin: 'https://component.test', source: component.iframe.contentWindow, data: response(message.id, { selectedProtocol: message.protocol, role: 'component', capabilities: [], permissions: [], selectedExtensions: [{ id: 'org.bap.component-config', version: '0.1.0' }] }) });
+  message = component.iframe.contentWindow.messages.at(-1).message;
+  window.dispatch({ type: 'message', origin: 'https://component.test', source: component.iframe.contentWindow, data: response(message.id, {}) });
+  message = component.iframe.contentWindow.messages.at(-1).message;
+  window.dispatch({ type: 'message', origin: 'https://component.test', source: component.iframe.contentWindow, data: response(message.id, {}) });
+  assert.equal(reports.at(-1)[0].state, 'running');
+  assert.equal(host.updateConfig('clock', { format: '12h' }, 1), true);
+  assert.deepEqual(reports.at(-1)[0].config, { format: '12h' });
+  component.pause();
+  message = component.iframe.contentWindow.messages.at(-1).message;
+  window.dispatch({ type: 'message', origin: 'https://component.test', source: component.iframe.contentWindow, data: response(message.id, {}) });
+  assert.equal(reports.at(-1)[0].state, 'paused');
+  host.unmount('clock');
+  assert.deepEqual(reports.at(-1), []);
+  host.destroy();
+});
+
 test('delivers initial and updated configuration only to the negotiated component instance', () => {
   const window = new FakeWindow();
   const extension = { id: 'org.bap.component-config', versions: ['0.1.0'] };
