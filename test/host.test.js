@@ -377,3 +377,20 @@ test('accepts an exactly offered presentation extension and reports initial effe
   assert.equal(visibility.payload.visible, false);
   host.destroy();
 });
+
+test('reports initial effective visibility when presentation uses its default values', () => {
+  const window = new FakeWindow();
+  const host = new HostRuntime({ window, document: new FakeDocument(), targetOrigin: 'https://component.test', extensions: [{ id: 'org.bap.presentation', versions: ['0.1.0'] }] });
+  const component = host.mount({ instanceId: 'clock', componentId: 'org.example.clock', src: 'https://component.test/clock.html', allowedOrigin: 'https://component.test', container: new Container() });
+  component.iframe.load();
+  const hello = component.iframe.contentWindow.messages.at(-1).message;
+  window.dispatch({ type: 'message', origin: 'https://component.test', source: component.iframe.contentWindow, data: response(hello.id, { selectedProtocol: hello.protocol, role: 'component', capabilities: [], permissions: [], selectedExtensions: [{ id: 'org.bap.presentation', version: '0.1.0' }] }, 's') });
+  let lifecycle = component.iframe.contentWindow.messages.at(-1).message;
+  window.dispatch({ type: 'message', origin: 'https://component.test', source: component.iframe.contentWindow, data: response(lifecycle.id, {}, 's') });
+  lifecycle = component.iframe.contentWindow.messages.at(-1).message;
+  window.dispatch({ type: 'message', origin: 'https://component.test', source: component.iframe.contentWindow, data: response(lifecycle.id, {}, 's') });
+  const visibility = component.iframe.contentWindow.messages.map(entry => entry.message).find(message => message.event === 'presentation.visibility.changed');
+  assert.equal(visibility.payload.instanceId, 'clock');
+  assert.equal(visibility.payload.visible, true);
+  host.destroy();
+});

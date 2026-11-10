@@ -41,7 +41,6 @@ export class ComponentHandle {
   private readonly inlineSource: boolean;
   private layout?: ComponentLayout;
   private renderedLayout = false;
-  private presentationConfigured = false;
   private presentation: PresentationState = { enabled: true, userVisible: true };
   private lastRenderedSize?: Size;
   private lastEffectiveVisibility?: boolean;
@@ -84,7 +83,7 @@ export class ComponentHandle {
   on(name: string, listener: Listener): () => void { const set = this.listeners.get(name) ?? new Set<Listener>(); set.add(listener); this.listeners.set(name, set); return () => set.delete(listener); }
   setSize(size: Size): void { this.requestedSize = size; this.iframe.style.width = this.renderedLayout ? '100%' : `${size.width}px`; this.iframe.style.height = this.renderedLayout ? '100%' : `${size.height}px`; if (['initialized', 'running', 'paused'].includes(this.state)) this.sendEvent('host.size.changed', size); }
   setLayout(layout: ComponentLayout): void { this.host.setLayout(this.instanceId, layout); }
-  setPresentation(patch: Partial<PresentationState>): void { this.presentationConfigured = true; this.presentation = { ...this.presentation, ...patch }; this.updatePresentation(); this.host.emit('componentInventoryChanged', this.host.getComponentInstances()); }
+  setPresentation(patch: Partial<PresentationState>): void { this.presentation = { ...this.presentation, ...patch }; this.updatePresentation(); this.host.emit('componentInventoryChanged', this.host.getComponentInstances()); }
   setConfig(config: Record<string, unknown>, revision: number): boolean {
     if (!isRecord(config) || !Number.isSafeInteger(revision) || revision <= this.configRevision ||
       !this.selectedExtensions.some(extension => extension.id === 'org.bap.component-config')) return false;
@@ -182,7 +181,6 @@ export class ComponentHandle {
     this.updatePresentation();
   }
   private updatePresentation(): void {
-    if (!this.presentationConfigured) return;
     const ready = this.state === 'running' || this.state === 'paused';
     const visible = this.presentation.enabled && this.presentation.userVisible && ready;
     this.wrapper.style.visibility = visible ? 'visible' : 'hidden';
